@@ -1,7 +1,7 @@
 import type { VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
-import { sanitizeText, sanitizeUrl } from '../utils/sanitize';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 import { HttpClient } from './HttpClient';
 
 type GitHubAdvisoryItem = {
@@ -56,7 +56,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
         id: sanitizeText(advisory.ghsa_id ?? 'unknown'),
         source: this.name,
         title: sanitizeText(advisory.summary ?? advisory.ghsa_id ?? 'GitHub Advisory'),
-        summary: sanitizeText(summary),
+        summary: sanitizeMarkdown(summary),
         publishedAt: advisory.published_at ?? new Date(0).toISOString(),
         cvssScore: score,
         severity: classifySeverity(score),

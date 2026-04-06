@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from 'obsidian';
+import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { severityOrder } from '../../domain/entities/Severity';
 import { sanitizeText } from '../utils/sanitize';
@@ -43,6 +43,10 @@ export class VulnDashView extends ItemView {
   }
 
   private render(): void {
+    void this.renderAsync();
+  }
+
+  private async renderAsync(): Promise<void> {
     const { contentEl } = this;
     contentEl.empty();
 
@@ -98,7 +102,8 @@ export class VulnDashView extends ItemView {
       const details = tbody.createEl('tr');
       const detailsCell = details.createEl('td', { attr: { colspan: '5' } });
       detailsCell.createEl('strong', { text: sanitizeText(vuln.title) });
-      detailsCell.createEl('p', { text: sanitizeText(vuln.summary) });
+      const summaryEl = detailsCell.createDiv({ cls: 'vulndash-summary' });
+      await MarkdownRenderer.render(this.app, vuln.summary, summaryEl, '', this);
       const refs = detailsCell.createDiv();
       for (const ref of vuln.references.slice(0, 3)) {
         const a = refs.createEl('a', { text: ref });
