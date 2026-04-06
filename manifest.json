@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "minAppVersion": "1.5.0",
   "description": "Near-live vulnerability and CVE dashboard for Obsidian.",
-  "author": "VulnDash",
-  "authorUrl": "https://example.com",
-  "isDesktopOnly": true,
+  "author": "Carlos Aguilar",
+  "authorUrl": "https://github.com/carlitoswhey29",
+  "isDesktopOnly": false,
   "main": "main.js"
 }

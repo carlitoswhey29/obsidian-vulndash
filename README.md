@@ -2,41 +2,6 @@
 
 VulnDash is an Obsidian plugin that provides a near-live CVE dashboard with polling, filtering, and severity-based alerting.
 
-## Clean Architecture Directory Tree
-
-```text
-.
-├── manifest.json
-├── package.json
-├── tsconfig.json
-├── esbuild.config.mjs
-├── styles.css
-└── src
-    ├── main.ts
-    ├── domain
-    │   ├── entities
-    │   │   ├── Severity.ts
-    │   │   └── Vulnerability.ts
-    │   └── services
-    │       └── Cvss.ts
-    ├── application
-    │   ├── ports
-    │   │   └── VulnerabilityFeed.ts
-    │   └── services
-    │       ├── AlertEngine.ts
-    │       ├── PollingOrchestrator.ts
-    │       └── types.ts
-    └── infrastructure
-        ├── api
-        │   ├── GitHubAdvisoryClient.ts
-        │   ├── HttpClient.ts
-        │   └── NvdClient.ts
-        ├── obsidian
-        │   └── VulnDashView.ts
-        └── utils
-            └── sanitize.ts
-```
-
 ## Security Notes
 
 - Rendering is safe by construction: no `innerHTML` is used; all user/API strings are sanitized before rendering.

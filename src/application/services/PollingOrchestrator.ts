@@ -54,7 +54,12 @@ export class PollingOrchestrator {
     for (let attempt = 1; attempt <= 4; attempt += 1) {
       try {
         return await feed.fetchVulnerabilities(signal);
-      } catch (error) {
+      } catch (error: unknown) {
+        if (error instanceof Error) {
+          console.warn(`Error fetching from ${feed.name} (attempt ${attempt}): ${error.message}`);
+        } else {
+          console.warn(`Unknown error fetching from ${feed.name} (attempt ${attempt})`);
+        }
         if (attempt === 4) return [];
         await sleep(delay);
         delay = Math.min(delay * 2, 30_000);

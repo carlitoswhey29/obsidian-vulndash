@@ -27,7 +27,7 @@ export class VulnDashView extends ItemView {
     return 'VulnDash';
   }
 
-  public async onOpen(): Promise<void> {
+  public override async onOpen(): Promise<void> {
     this.render();
   }
 

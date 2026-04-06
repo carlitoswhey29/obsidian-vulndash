@@ -1,4 +1,7 @@
 import esbuild from 'esbuild';
+import process from 'node:process';
+
+const production = process.argv.includes("production");
 
 await esbuild.build({
   entryPoints: ['src/main.ts'],
@@ -7,11 +10,18 @@ await esbuild.build({
   platform: 'browser',
   target: 'es2021',
   outfile: 'main.js',
-  sourcemap: false,
+  sourcemap: production ? false : "inline",
   minify: true,
   logLevel: 'info',
   legalComments: 'none',
-  external: ['obsidian'],
+  external: ['obsidian', 'electron', '@codemirror/*'],
   metafile: true,
   treeShaking: true
 });
+
+if (production) {
+  await context.rebuild();
+  await context.dispose();
+} else {
+  await context.watch();
+}

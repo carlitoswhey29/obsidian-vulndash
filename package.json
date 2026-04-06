@@ -3,25 +3,39 @@
   "version": "1.0.0",
   "description": "Obsidian vulnerability dashboard plugin",
   "private": true,
-  "type": "module",
   "main": "main.js",
+  "type": "module",
+  "author": "Carlos Aguilar",
+  "license": "MIT",
   "scripts": {
-    "clean": "rm -rf dist main.js sbom.json",
+    "clean": "rimraf dist main.js",
+    "dev": "node esbuild.config.mjs",
     "lint": "eslint \"src/**/*.ts\" --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "build": "npm run lint && npm run typecheck && node esbuild.config.mjs",
-    "sbom": "cyclonedx-npm --output-file sbom.json --output-format json",
     "build:secure": "npm run build && npm run sbom"
   },
   "devDependencies": {
-    "@cyclonedx/cyclonedx-npm": "^3.10.0",
+    "@eslint/js": "^9.20.0",
+    "@types/node": "^22.10.0",
     "@typescript-eslint/eslint-plugin": "^8.32.0",
     "@typescript-eslint/parser": "^8.32.0",
     "esbuild": "^0.25.4",
-    "eslint": "^8.57.1",
-    "typescript": "^5.8.3"
+    "eslint": "^9.20.0",
+    "rimraf": "^6.1.3",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.32.0"
   },
   "dependencies": {
     "obsidian": "^1.6.7"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/carlitoswhey29/obsidian-vulndash.git"
+  },
+  "bugs": {
+    "url": "https://github.com/carlitoswhey29/obsidian-vulndash/issues"
+  },
+  "homepage": "https://github.com/carlitoswhey29/obsidian-vulndash#readme"
 }
