@@ -7,6 +7,7 @@ export class AlertEngine {
     const keywords = settings.keywordFilters.map((v) => v.toLowerCase());
     const products = settings.productFilters.map((v) => v.toLowerCase());
     const minSeverityRank = severityOrder[settings.minSeverity];
+    const regexFilters = settings.keywordRegexEnabled ? this.getRegexFilters(settings.keywordFilters) : [];
 
     return vulnerabilities.filter((vuln) => {
       if (vuln.cvssScore < settings.minCvssScore) return false;
@@ -15,9 +16,24 @@ export class AlertEngine {
       const haystack = `${vuln.title} ${vuln.summary}`.toLowerCase();
       const productMatch = products.length === 0
         || vuln.affectedProducts.some((p) => products.some((filter) => p.toLowerCase().includes(filter)));
-      const keywordMatch = keywords.length === 0 || keywords.some((keyword) => haystack.includes(keyword));
+      const keywordMatch = settings.keywordRegexEnabled
+        ? regexFilters.length === 0 || regexFilters.some((keyword) => keyword.test(`${vuln.title} ${vuln.summary}`))
+        : keywords.length === 0 || keywords.some((keyword) => haystack.includes(keyword));
 
       return keywordMatch && productMatch;
     });
+  }
+
+  private getRegexFilters(filters: string[]): RegExp[] {
+    const regexFilters: RegExp[] = [];
+    for (const filter of filters) {
+      try {
+        regexFilters.push(new RegExp(filter, 'i'));
+      } catch {
+        // Ignore invalid user-provided regex.
+      }
+    }
+
+    return regexFilters;
   }
 }

@@ -1,4 +1,5 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
+import type { DashboardSortOrder, VulnDashSettings } from '../../application/services/types';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { severityOrder } from '../../domain/entities/Severity';
 import { sanitizeText } from '../utils/sanitize';
@@ -12,6 +13,15 @@ export class VulnDashView extends ItemView {
   private newItems = new Set<string>();
   private sortKey: SortKey = 'publishedAt';
   private sortDesc = true;
+  private maxResults = 100;
+  private colorCodedSeverity = true;
+  private columnVisibility: VulnDashSettings['columnVisibility'] = {
+    id: true,
+    source: true,
+    severity: true,
+    cvssScore: true,
+    publishedAt: true
+  };
   private readonly onRefresh: () => Promise<void>;
 
   public constructor(leaf: WorkspaceLeaf, onRefresh: () => Promise<void>) {
@@ -31,6 +41,15 @@ export class VulnDashView extends ItemView {
     this.render();
   }
 
+  public setSettings(settings: VulnDashSettings): void {
+    this.sortKey = this.getDefaultSort(settings.defaultSortOrder);
+    this.sortDesc = true;
+    this.maxResults = settings.maxResults;
+    this.colorCodedSeverity = settings.colorCodedSeverity;
+    this.columnVisibility = settings.columnVisibility;
+    this.render();
+  }
+
   public setData(vulnerabilities: Vulnerability[]): void {
     const previous = new Set(this.vulnerabilities.map((v) => v.id));
     for (const vuln of vulnerabilities) {
@@ -40,6 +59,14 @@ export class VulnDashView extends ItemView {
     }
     this.vulnerabilities = vulnerabilities;
     this.render();
+  }
+
+  private getDefaultSort(sortOrder: DashboardSortOrder): SortKey {
+    if (sortOrder === 'cvssScore') {
+      return 'cvssScore';
+    }
+
+    return 'publishedAt';
   }
 
   private render(): void {
@@ -61,15 +88,16 @@ export class VulnDashView extends ItemView {
     const thead = table.createEl('thead');
     const headRow = thead.createEl('tr');
 
-    const columns: Array<{ key: SortKey; label: string }> = [
-      { key: 'id', label: 'ID' },
-      { key: 'source', label: 'Source' },
-      { key: 'severity', label: 'Severity' },
-      { key: 'cvssScore', label: 'CVSS' },
-      { key: 'publishedAt', label: 'Published' }
+    const columns: Array<{ key: SortKey; label: string; visible: boolean }> = [
+      { key: 'id', label: 'ID', visible: this.columnVisibility.id },
+      { key: 'source', label: 'Source', visible: this.columnVisibility.source },
+      { key: 'severity', label: 'Severity', visible: this.columnVisibility.severity },
+      { key: 'cvssScore', label: 'CVSS', visible: this.columnVisibility.cvssScore },
+      { key: 'publishedAt', label: 'Published', visible: this.columnVisibility.publishedAt }
     ];
+    const visibleColumns = columns.filter((column) => column.visible);
 
-    for (const column of columns) {
+    for (const column of visibleColumns) {
       const th = headRow.createEl('th', { text: column.label });
       th.addEventListener('click', () => {
         if (this.sortKey === column.key) {
@@ -83,24 +111,43 @@ export class VulnDashView extends ItemView {
     }
 
     const tbody = table.createEl('tbody');
-    for (const vuln of this.getSorted()) {
+    const data = this.getSorted().slice(0, this.maxResults);
+    for (const vuln of data) {
       const row = tbody.createEl('tr');
-      const idCell = row.createEl('td', { text: sanitizeText(vuln.id) });
-      if (this.newItems.has(vuln.id)) {
-        idCell.addClass('vulndash-new');
-      }
 
-      row.createEl('td', { text: sanitizeText(vuln.source) });
-      const sev = row.createEl('td', { text: sanitizeText(vuln.severity) });
-      if (vuln.severity === 'CRITICAL') {
-        sev.addClass('vulndash-critical');
-      }
+      for (const column of visibleColumns) {
+        if (column.key === 'id') {
+          const idCell = row.createEl('td', { text: sanitizeText(vuln.id) });
+          if (this.newItems.has(vuln.id)) {
+            idCell.addClass('vulndash-new');
+          }
+        }
 
-      row.createEl('td', { text: vuln.cvssScore.toFixed(1) });
-      row.createEl('td', { text: new Date(vuln.publishedAt).toLocaleString() });
+        if (column.key === 'source') {
+          row.createEl('td', { text: sanitizeText(vuln.source) });
+        }
+
+        if (column.key === 'severity') {
+          const sev = row.createEl('td', { text: sanitizeText(vuln.severity) });
+          if (this.colorCodedSeverity && vuln.severity === 'CRITICAL') {
+            sev.addClass('vulndash-critical');
+          }
+          if (this.colorCodedSeverity && vuln.severity === 'HIGH') {
+            sev.addClass('vulndash-high');
+          }
+        }
+
+        if (column.key === 'cvssScore') {
+          row.createEl('td', { text: vuln.cvssScore.toFixed(1) });
+        }
+
+        if (column.key === 'publishedAt') {
+          row.createEl('td', { text: new Date(vuln.publishedAt).toLocaleString() });
+        }
+      }
 
       const details = tbody.createEl('tr');
-      const detailsCell = details.createEl('td', { attr: { colspan: '5' } });
+      const detailsCell = details.createEl('td', { attr: { colspan: String(Math.max(visibleColumns.length, 1)) } });
       detailsCell.createEl('strong', { text: sanitizeText(vuln.title) });
       const summaryEl = detailsCell.createDiv({ cls: 'vulndash-summary' });
       await MarkdownRenderer.render(this.app, vuln.summary, summaryEl, '', this);
