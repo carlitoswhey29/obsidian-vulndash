@@ -1,0 +1,33 @@
+.vulndash-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.vulndash-table th,
+.vulndash-table td {
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 0.35rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.vulndash-table th {
+  cursor: pointer;
+}
+
+.vulndash-new {
+  font-weight: 700;
+  color: var(--text-accent);
+}
+
+.vulndash-critical {
+  color: var(--text-error);
+  font-weight: 700;
+}
+
+.vulndash-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}

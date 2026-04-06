@@ -1,0 +1,27 @@
+{
+  "name": "obsidian-vulndash",
+  "version": "1.0.0",
+  "description": "Obsidian vulnerability dashboard plugin",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "clean": "rm -rf dist main.js sbom.json",
+    "lint": "eslint \"src/**/*.ts\" --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run lint && npm run typecheck && node esbuild.config.mjs",
+    "sbom": "cyclonedx-npm --output-file sbom.json --output-format json",
+    "build:secure": "npm run build && npm run sbom"
+  },
+  "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "^3.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.32.0",
+    "@typescript-eslint/parser": "^8.32.0",
+    "esbuild": "^0.25.4",
+    "eslint": "^8.57.1",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "obsidian": "^1.6.7"
+  }
+}
