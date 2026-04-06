@@ -1,7 +1,7 @@
 import type { VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
-import { sanitizeText, sanitizeUrl } from '../utils/sanitize';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 import { HttpClient } from './HttpClient';
 
 interface NvdResponse {
@@ -54,7 +54,7 @@ export class NvdClient implements VulnerabilityFeed {
           id: sanitizeText(cve.id ?? 'unknown'),
           source: this.name,
           title: sanitizeText(cve.id ?? 'Unknown CVE'),
-          summary: sanitizeText(description),
+          summary: sanitizeMarkdown(description),
           publishedAt: cve.published ?? new Date(0).toISOString(),
           cvssScore: score,
           severity: classifySeverity(score),
