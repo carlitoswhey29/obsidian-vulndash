@@ -25,6 +25,11 @@
   font-weight: 700;
 }
 
+.vulndash-high {
+  color: var(--text-warning);
+  font-weight: 600;
+}
+
 .vulndash-header {
   display: flex;
   justify-content: space-between;
