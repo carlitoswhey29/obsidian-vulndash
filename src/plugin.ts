@@ -13,6 +13,7 @@ import { HttpClient } from './infrastructure/api/HttpClient';
 import { NvdClient } from './infrastructure/api/NvdClient';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
 import { VulnDashSettingTab } from './VulnDashSettingTab';
+import { decryptSecret, encryptSecret } from './infrastructure/utils/crypto';
 
 const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
   id: true,
@@ -226,9 +227,6 @@ export default class VulnDashPlugin extends Plugin {
     }
   }
 
-  /** Creates individual notes for critical vulnerabilities if auto-note creation is enabled.
-   * Notes are only created for vulnerabilities that are newly detected as critical to avoid duplicates.
-   */
   private async createCriticalNotes(vulnerabilities: Vulnerability[]): Promise<void> {
     if (vulnerabilities.length === 0) {
       return;
@@ -382,9 +380,20 @@ export default class VulnDashPlugin extends Plugin {
 
   private async loadSettings(): Promise<void> {
     const loaded = await this.loadData();
+
+    let decryptedNvd = '';
+    let decryptedGithub = '';
+
+    if (loaded) {
+      decryptedNvd = await decryptSecret((loaded as Partial<VulnDashSettings>).nvdApiKey ?? '');
+      decryptedGithub = await decryptSecret((loaded as Partial<VulnDashSettings>).githubToken ?? '');
+    }
+
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...(loaded as Partial<VulnDashSettings> | null),
+      nvdApiKey: decryptedNvd,
+      githubToken: decryptedGithub,
       columnVisibility: {
         ...DEFAULT_COLUMN_VISIBILITY,
         ...((loaded as Partial<VulnDashSettings> | null)?.columnVisibility ?? {})
@@ -393,6 +402,15 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    const encryptedNvd = await encryptSecret(this.settings.nvdApiKey);
+    const encryptedGithub = await encryptSecret(this.settings.githubToken);
+
+    const dataToSave: VulnDashSettings = {
+       ...this.settings,
+       nvdApiKey: encryptedNvd,
+       githubToken: encryptedGithub
+    };
+
+    await this.saveData(dataToSave);
   }
 }
