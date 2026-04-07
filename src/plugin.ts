@@ -13,7 +13,7 @@ import { HttpClient } from './infrastructure/api/HttpClient';
 import { NvdClient } from './infrastructure/api/NvdClient';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
 import { VulnDashSettingTab } from './VulnDashSettingTab';
-import { decryptSecret, encryptSecret } from './infrastructure/utils/crypto';
+import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from './infrastructure/utils/crypto';
 
 const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
   id: true,
@@ -380,30 +380,35 @@ export default class VulnDashPlugin extends Plugin {
 
   private async loadSettings(): Promise<void> {
     const loaded = await this.loadData();
-
-    let decryptedNvd = '';
-    let decryptedGithub = '';
-
-    if (loaded) {
-      decryptedNvd = await decryptSecret((loaded as Partial<VulnDashSettings>).nvdApiKey ?? '');
-      decryptedGithub = await decryptSecret((loaded as Partial<VulnDashSettings>).githubToken ?? '');
-    }
+    const loadedSettings = (loaded as Partial<VulnDashSettings> | null) ?? null;
+    const loadedNvd = loadedSettings?.nvdApiKey ?? '';
+    const loadedGithub = loadedSettings?.githubToken ?? '';
+    const nvdSecret = await this.loadSecret(loadedNvd);
+    const githubSecret = await this.loadSecret(loadedGithub);
 
     this.settings = {
       ...DEFAULT_SETTINGS,
-      ...(loaded as Partial<VulnDashSettings> | null),
-      nvdApiKey: decryptedNvd,
-      githubToken: decryptedGithub,
+      ...loadedSettings,
+      nvdApiKey: nvdSecret.value,
+      githubToken: githubSecret.value,
       columnVisibility: {
         ...DEFAULT_COLUMN_VISIBILITY,
-        ...((loaded as Partial<VulnDashSettings> | null)?.columnVisibility ?? {})
+        ...(loadedSettings?.columnVisibility ?? {})
       }
     };
+
+    if (nvdSecret.decryptionFailed || githubSecret.decryptionFailed) {
+      new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
+    }
+
+    if (nvdSecret.needsMigration || githubSecret.needsMigration) {
+      await this.saveSettings();
+    }
   }
 
   private async saveSettings(): Promise<void> {
-    const encryptedNvd = await encryptSecret(this.settings.nvdApiKey);
-    const encryptedGithub = await encryptSecret(this.settings.githubToken);
+    const encryptedNvd = await this.serializeSecret(this.settings.nvdApiKey);
+    const encryptedGithub = await this.serializeSecret(this.settings.githubToken);
 
     const dataToSave: VulnDashSettings = {
        ...this.settings,
@@ -412,5 +417,34 @@ export default class VulnDashPlugin extends Plugin {
     };
 
     await this.saveData(dataToSave);
+  }
+
+  private async serializeSecret(secret: string): Promise<string> {
+    if (!secret) {
+      return '';
+    }
+    const encrypted = await encryptSecret(secret);
+    if (!encrypted) {
+      return '';
+    }
+    return `${ENCRYPTED_SECRET_PREFIX}${encrypted}`;
+  }
+
+  private async loadSecret(secret: string): Promise<{ value: string; needsMigration: boolean; decryptionFailed: boolean }> {
+    if (!secret) {
+      return { value: '', needsMigration: false, decryptionFailed: false };
+    }
+
+    if (!secret.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+      return { value: secret, needsMigration: true, decryptionFailed: false };
+    }
+
+    const encryptedPayload = secret.slice(ENCRYPTED_SECRET_PREFIX.length);
+    const decrypted = await decryptSecret(encryptedPayload);
+    if (decrypted.status === 'success') {
+      return { value: decrypted.value, needsMigration: false, decryptionFailed: false };
+    }
+
+    return { value: '', needsMigration: false, decryptionFailed: true };
   }
 }

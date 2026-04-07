@@ -8,6 +8,13 @@
  * enterprise-grade security solutions. Always follow best practices for handling sensitive data.
  */
 const LOCAL_STORAGE_KEY = 'vulndash-encryption-key';
+export const ENCRYPTED_SECRET_PREFIX = 'enc:';
+
+export interface DecryptSecretResult {
+  status: 'empty' | 'success' | 'failed';
+  value: string;
+  reason?: 'invalid_payload' | 'decrypt_failed';
+}
 
 async function getOrCreateKey(): Promise<CryptoKey> {
   let rawKey = window.localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -58,12 +65,21 @@ export async function encryptSecret(plainText: string): Promise<string> {
   return btoa(String.fromCharCode(...combined));
 }
 
-export async function decryptSecret(cipherTextB64: string): Promise<string> {
-  if (!cipherTextB64) return '';
+export async function decryptSecret(cipherTextB64: string): Promise<DecryptSecretResult> {
+  if (!cipherTextB64) {
+    return { status: 'empty', value: '' };
+  }
 
   try {
     const key = await getOrCreateKey();
     const combined = Uint8Array.from(atob(cipherTextB64), c => c.charCodeAt(0));
+    if (combined.length <= 12) {
+      return {
+        status: 'failed',
+        value: '',
+        reason: 'invalid_payload'
+      };
+    }
 
     const iv = combined.slice(0, 12);
     const cipherText = combined.slice(12);
@@ -73,9 +89,13 @@ export async function decryptSecret(cipherTextB64: string): Promise<string> {
       key,
       cipherText
     );
-    return new TextDecoder().decode(decrypted);
-  } catch (e) {
+    return { status: 'success', value: new TextDecoder().decode(decrypted) };
+  } catch {
     console.warn("VulnDash: Failed to decrypt secret. You may need to re-enter your API keys.");
-    return '';
+    return {
+      status: 'failed',
+      value: '',
+      reason: 'decrypt_failed'
+    };
   }
 }
