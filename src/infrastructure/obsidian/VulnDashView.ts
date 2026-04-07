@@ -25,6 +25,8 @@ export class VulnDashView extends ItemView {
     publishedAt: true
   };
   private localSearchQuery = '';
+  private tableContainer: HTMLDivElement | null = null;
+  private filterDebounceHandle: number | null = null;
   private readonly onRefresh: () => Promise<void>;
   private readonly onTogglePolling: () => Promise<void>;
   private readonly isPollingEnabled: () => boolean;
@@ -50,7 +52,49 @@ export class VulnDashView extends ItemView {
   }
 
   public override async onOpen(): Promise<void> {
+    this.buildHeader();
     this.render();
+  }
+
+  private buildHeader(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    const header = contentEl.createDiv({ cls: 'vulndash-header' });
+    header.createEl('h2', { text: 'VulnDash Dashboard' });
+
+    const controls = header.createDiv({ cls: 'vulndash-controls' });
+
+    const searchInput = controls.createEl('input', {
+      type: 'text',
+      placeholder: 'Filter results...',
+      cls: 'vulndash-search-bar'
+    });
+    searchInput.value = this.localSearchQuery;
+    searchInput.addEventListener('input', (e) => {
+      this.localSearchQuery = (e.target as HTMLInputElement).value.toLowerCase();
+      if (this.filterDebounceHandle !== null) {
+        window.clearTimeout(this.filterDebounceHandle);
+      }
+      this.filterDebounceHandle = window.setTimeout(() => {
+        this.filterDebounceHandle = null;
+        this.render();
+      }, 250);
+    });
+
+    const pollingBtn = controls.createEl('button', {
+      text: this.isPollingEnabled() ? 'Stop polling' : 'Start polling'
+    });
+    pollingBtn.addEventListener('click', () => {
+      void this.onTogglePolling();
+    });
+
+    const refreshBtn = controls.createEl('button', { text: 'Refresh now' });
+    refreshBtn.addEventListener('click', () => {
+      void this.onRefresh();
+    });
+
+    this.tableContainer = contentEl.createDiv({ cls: 'vulndash-table-container' });
   }
 
   public setSettings(settings: VulnDashSettings): void {
@@ -94,40 +138,16 @@ export class VulnDashView extends ItemView {
   }
 
   private async renderAsync(): Promise<void> {
-    const { contentEl } = this;
-    contentEl.empty();
-
-    // 1. Header and controls: local search only affects client-side rendered rows.
-    const header = contentEl.createDiv({ cls: 'vulndash-header' });
-    header.createEl('h2', { text: 'VulnDash Dashboard' });
-
-    const controls = header.createDiv({ cls: 'vulndash-controls' });
-
-    const searchInput = controls.createEl('input', {
-      type: 'text',
-      placeholder: 'Filter results...',
-      cls: 'vulndash-search-bar'
-    });
-    searchInput.value = this.localSearchQuery;
-    searchInput.addEventListener('input', (e) => {
-      this.localSearchQuery = (e.target as HTMLInputElement).value.toLowerCase();
-      this.render(); // Re-render table on type
-    });
-
-    const pollingBtn = controls.createEl('button', {
-      text: this.isPollingEnabled() ? 'Stop polling' : 'Start polling'
-    });
-    pollingBtn.addEventListener('click', () => {
-      void this.onTogglePolling();
-    });
-
-    const refreshBtn = controls.createEl('button', { text: 'Refresh now' });
-    refreshBtn.addEventListener('click', () => {
-      void this.onRefresh();
-    });
+    if (this.tableContainer === null) {
+      this.buildHeader();
+    }
+    this.tableContainer?.empty();
 
     // 2. Table setup: only visible columns are rendered and sortable.
-    const table = contentEl.createEl('table', { cls: 'vulndash-table' });
+    const table = this.tableContainer?.createEl('table', { cls: 'vulndash-table' });
+    if (!table) {
+      return;
+    }
     const thead = table.createEl('thead');
     const headRow = thead.createEl('tr');
 
