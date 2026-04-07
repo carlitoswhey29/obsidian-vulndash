@@ -236,6 +236,19 @@ export class VulnDashSettingTab extends PluginSettingTab {
       })
       );
 
+    new Setting(containerEl)
+      .setName('Bootstrap lookback (hours)')
+      .setDesc('Used when no prior source cursor exists.')
+      .addText((text) => text.setValue(String(Math.floor(settings.syncControls.bootstrapLookbackMs / 3_600_000))).onChange(async (value) => {
+        const hours = Number.parseInt(value, 10);
+        if (Number.isNaN(hours) || hours < 1) return;
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          syncControls: { ...this.plugin.getSettings().syncControls, bootstrapLookbackMs: hours * 3_600_000 }
+        });
+      })
+      );
+
     containerEl.createEl('h3', { text: 'Advanced Filtering' });
 
     new Setting(containerEl)

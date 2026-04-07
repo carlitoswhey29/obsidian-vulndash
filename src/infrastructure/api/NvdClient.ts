@@ -6,6 +6,8 @@ import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { FeedSyncControls } from './GitHubAdvisoryClient';
 
 interface NvdResponse {
+  startIndex?: number;
+  resultsPerPage?: number;
   totalResults?: number;
   vulnerabilities?: Array<{
     cve?: {
@@ -49,7 +51,7 @@ export class NvdClient implements VulnerabilityFeed {
       }
       seenIndexes.add(startIndex);
 
-      const url = this.buildUrl(options.since, startIndex);
+      const url = this.buildUrl(options.since, options.until, startIndex);
       const data = await this.httpClient.getJson<NvdResponse>(url, headers, options.signal);
       pagesFetched += 1;
 
@@ -58,7 +60,6 @@ export class NvdClient implements VulnerabilityFeed {
         .filter((cve): cve is NonNullable<typeof cve> => Boolean(cve?.id))
         .map((cve) => this.normalize(cve));
 
-      let newItems = 0;
       for (const item of items) {
         if (collected.length >= this.controls.maxItems) {
           warnings.push('max_items_reached');
@@ -68,18 +69,13 @@ export class NvdClient implements VulnerabilityFeed {
         if (dedup.has(key)) continue;
         dedup.add(key);
         collected.push(item);
-        newItems += 1;
       }
 
-      if (newItems === 0) {
-        warnings.push('no_new_unique_records');
+      const nextStartIndex = (data.data.startIndex ?? startIndex) + (data.data.resultsPerPage ?? items.length);
+      if (items.length === 0 || nextStartIndex >= (data.data.totalResults ?? 0)) {
         break;
       }
-
-      startIndex += items.length;
-      if (items.length === 0 || startIndex >= (data.data.totalResults ?? 0)) {
-        break;
-      }
+      startIndex = nextStartIndex;
     }
 
     if (pagesFetched >= this.controls.maxPages) warnings.push('max_pages_reached');
@@ -87,7 +83,7 @@ export class NvdClient implements VulnerabilityFeed {
     return { vulnerabilities: collected, pagesFetched, warnings, retriesPerformed: 0 };
   }
 
-  private buildUrl(since: string | undefined, startIndex: number): string {
+  private buildUrl(since: string | undefined, until: string | undefined, startIndex: number): string {
     const params = new URLSearchParams({
       resultsPerPage: '100',
       startIndex: String(startIndex)
@@ -95,6 +91,9 @@ export class NvdClient implements VulnerabilityFeed {
     if (since) {
       // NVD incremental mapping: query CVEs changed since cursor.
       params.set('lastModStartDate', since);
+    }
+    if (until) {
+      params.set('lastModEndDate', until);
     }
     return `https://services.nvd.nist.gov/rest/json/cves/2.0?${params.toString()}`;
   }

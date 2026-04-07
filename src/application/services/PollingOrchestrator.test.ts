@@ -9,13 +9,16 @@ const controls = {
   retryCount: 2,
   backoffBaseMs: 1,
   overlapWindowMs: 120_000,
+  bootstrapLookbackMs: 86_400_000,
   debugHttpMetadata: false
 };
 
 test('advances cursor only on successful source sync', async () => {
+  let githubUntil: string | undefined;
   const successFeed: VulnerabilityFeed = {
     name: 'GitHub',
-    async fetchVulnerabilities() {
+    async fetchVulnerabilities(options) {
+      githubUntil = options.until;
       return {
         vulnerabilities: [{
           id: 'GHSA-1', source: 'GitHub', title: 'one', summary: 'one',
@@ -42,7 +45,7 @@ test('advances cursor only on successful source sync', async () => {
   });
 
   const outcome = await orchestrator.pollOnce();
-  assert.equal(outcome.sourceSyncCursor.GitHub, '2026-01-02T00:00:00.000Z');
+  assert.equal(outcome.sourceSyncCursor.GitHub, githubUntil);
   assert.equal(outcome.sourceSyncCursor.NVD, '2026-01-01T00:00:00.000Z');
 });
 
@@ -74,4 +77,29 @@ test('idempotent merge keeps newest record', async () => {
   const outcome = await orchestrator.pollOnce();
   assert.equal(outcome.vulnerabilities.length, 1);
   assert.equal(outcome.vulnerabilities[0]?.title, 'new');
+});
+
+test('uses bootstrap lookback and fixed until window when cursor is missing', async () => {
+  const calls: Array<{ since?: string; until?: string }> = [];
+  const feed: VulnerabilityFeed = {
+    name: 'NVD',
+    async fetchVulnerabilities(options) {
+      calls.push({
+        ...(options.since ? { since: options.since } : {}),
+        ...(options.until ? { until: options.until } : {})
+      });
+      return { vulnerabilities: [], pagesFetched: 1, warnings: [], retriesPerformed: 0 };
+    }
+  };
+
+  const orchestrator = new PollingOrchestrator([feed], controls, { cache: [], sourceSyncCursor: {} });
+  const outcome = await orchestrator.pollOnce();
+
+  assert.equal(calls.length, 1);
+  assert.equal(typeof calls[0]?.since, 'string');
+  assert.equal(typeof calls[0]?.until, 'string');
+  const sinceMs = Date.parse(calls[0]?.since ?? '');
+  const untilMs = Date.parse(calls[0]?.until ?? '');
+  assert.equal(untilMs - sinceMs, controls.bootstrapLookbackMs);
+  assert.equal(outcome.sourceSyncCursor.NVD, calls[0]?.until);
 });
