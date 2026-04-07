@@ -13,6 +13,7 @@ export interface ColumnVisibility {
 
 export interface VulnDashSettings {
   pollingIntervalMs: number;
+  pollOnStartup: boolean;
   keywordFilters: string[];
   productFilters: string[];
   minSeverity: Severity;

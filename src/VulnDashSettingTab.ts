@@ -15,6 +15,14 @@ export class VulnDashSettingTab extends PluginSettingTab {
     containerEl.createEl('h2', { text: 'VulnDash Settings' });
 
     new Setting(containerEl)
+      .setName('Poll on startup')
+      .setDesc('Automatically start polling when the plugin loads.')
+      .addToggle((toggle) => toggle.setValue(settings.pollOnStartup).onChange(async (value) => {
+        await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollOnStartup: value });
+      })
+      );
+
+    new Setting(containerEl)
       .setName('Polling interval (seconds)')
       .addText((text) => text
         .setPlaceholder('60')
