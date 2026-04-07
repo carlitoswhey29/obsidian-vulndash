@@ -11,6 +11,7 @@ type SortKey = 'publishedAt' | 'severity' | 'cvssScore' | 'id' | 'source' | 'tit
 export class VulnDashView extends ItemView {
   private vulnerabilities: Vulnerability[] = [];
   private newItems = new Set<string>();
+  private expandedItems = new Set<string>();
   private sortKey: SortKey = 'publishedAt';
   private sortDesc = true;
   private maxResults = 100; // Default value, will be overridden by settings
@@ -54,11 +55,15 @@ export class VulnDashView extends ItemView {
 
   public setData(vulnerabilities: Vulnerability[]): void {
     const previous = new Set(this.vulnerabilities.map((v) => v.id));
+    const current = new Set(vulnerabilities.map((v) => v.id));
     for (const vuln of vulnerabilities) {
       if (!previous.has(vuln.id)) {
         this.newItems.add(vuln.id);
       }
     }
+    this.expandedItems = new Set(
+      Array.from(this.expandedItems).filter((id) => current.has(id))
+    );
     this.vulnerabilities = vulnerabilities;
     this.render();
   }
@@ -150,7 +155,8 @@ export class VulnDashView extends ItemView {
         if (column.key === 'id') {
           const idCell = row.createEl('td');
           // The first column controls expand/collapse affordance for details.
-          idCell.createSpan({ text: '[+]', cls: 'vulndash-expand-indicator' });
+          const isExpanded = this.expandedItems.has(vuln.id);
+          idCell.createSpan({ text: isExpanded ? '[-]' : '[+]', cls: 'vulndash-expand-indicator' });
           const idText = idCell.createSpan({ text: sanitizeText(vuln.id) });
 
           if (this.newItems.has(vuln.id)) {
@@ -158,7 +164,8 @@ export class VulnDashView extends ItemView {
           }
         }
         if (column.key === 'title') {
-          row.createEl('td', { text: sanitizeText(vuln.title) });
+          const titleCell = row.createEl('td', { text: sanitizeText(vuln.title), cls: 'vulndash-title' });
+          titleCell.addClass('markdown-preview-view');
         }
         if (column.key === 'source') {
           row.createEl('td', { text: sanitizeText(vuln.source) });
@@ -178,7 +185,8 @@ export class VulnDashView extends ItemView {
 
       // Details row lives directly below the main row for easy toggling.
       const details = tbody.createEl('tr', { cls: 'vulndash-row-details' });
-      details.style.display = 'none'; // Hidden by default
+      const isExpanded = this.expandedItems.has(vuln.id);
+      details.style.display = isExpanded ? 'table-row' : 'none';
 
       const detailsCell = details.createEl('td', { attr: { colspan: String(Math.max(visibleColumns.length, 1)) } });
       detailsCell.createEl('h3', { text: sanitizeText(vuln.title), cls: 'vulndash-details-title' });
@@ -199,10 +207,14 @@ export class VulnDashView extends ItemView {
         refs.createEl('br');
       }
 
-      // Keep row interaction state entirely in DOM to avoid extra view state bookkeeping.
       row.addEventListener('click', () => {
         const isHidden = details.style.display === 'none';
         details.style.display = isHidden ? 'table-row' : 'none';
+        if (isHidden) {
+          this.expandedItems.add(vuln.id);
+        } else {
+          this.expandedItems.delete(vuln.id);
+        }
 
         const indicator = row.querySelector('.vulndash-expand-indicator');
         if (indicator) {
