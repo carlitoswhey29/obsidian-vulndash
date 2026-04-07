@@ -79,7 +79,7 @@ export class VulnDashView extends ItemView {
     const { contentEl } = this;
     contentEl.empty();
 
-    // 1. Header & Quick Filter Search Bar
+    // 1. Header and controls: local search only affects client-side rendered rows.
     const header = contentEl.createDiv({ cls: 'vulndash-header' });
     header.createEl('h2', { text: 'VulnDash Dashboard' });
 
@@ -101,7 +101,7 @@ export class VulnDashView extends ItemView {
       void this.onRefresh();
     });
 
-    // 2. Table Setup
+    // 2. Table setup: only visible columns are rendered and sortable.
     const table = contentEl.createEl('table', { cls: 'vulndash-table' });
     const thead = table.createEl('thead');
     const headRow = thead.createEl('tr');
@@ -131,7 +131,7 @@ export class VulnDashView extends ItemView {
 
     const tbody = table.createEl('tbody');
 
-    // 3. Apply Local Search Filter
+    // 3. Apply local search after sorting to preserve user-selected ordering.
     let data = this.getSorted().slice(0, this.maxResults);
     if (this.localSearchQuery) {
       data = data.filter(v =>
@@ -141,7 +141,7 @@ export class VulnDashView extends ItemView {
       );
     }
 
-    // 4. Render Rows with Folding Logic
+    // 4. Render compact rows with a collapsible details row per vulnerability.
     for (const vuln of data) {
       // Main Row
       const row = tbody.createEl('tr', { cls: 'vulndash-row-main vulndash-item-boundary' });
@@ -149,7 +149,7 @@ export class VulnDashView extends ItemView {
       for (const column of visibleColumns) {
         if (column.key === 'id') {
           const idCell = row.createEl('td');
-          // Add fold indicator
+          // The first column controls expand/collapse affordance for details.
           idCell.createSpan({ text: '[+]', cls: 'vulndash-expand-indicator' });
           const idText = idCell.createSpan({ text: sanitizeText(vuln.id) });
 
@@ -176,7 +176,7 @@ export class VulnDashView extends ItemView {
         }
       }
 
-      // Details Row
+      // Details row lives directly below the main row for easy toggling.
       const details = tbody.createEl('tr', { cls: 'vulndash-row-details' });
       details.style.display = 'none'; // Hidden by default
 
@@ -184,7 +184,7 @@ export class VulnDashView extends ItemView {
       detailsCell.createEl('h3', { text: sanitizeText(vuln.title), cls: 'vulndash-details-title' });
 
       const summaryEl = detailsCell.createDiv({ cls: 'vulndash-summary' });
-      // Add markdown-preview-view class so Obsidian knows to format it like standard markdown
+      // Use Obsidian's preview styling to keep markdown summaries visually consistent.
       summaryEl.addClass('markdown-preview-view');
       await MarkdownRenderer.render(this.app, vuln.summary, summaryEl, '', this);
 
@@ -199,7 +199,7 @@ export class VulnDashView extends ItemView {
         refs.createEl('br');
       }
 
-      // Interaction Logic
+      // Keep row interaction state entirely in DOM to avoid extra view state bookkeeping.
       row.addEventListener('click', () => {
         const isHidden = details.style.display === 'none';
         details.style.display = isHidden ? 'table-row' : 'none';

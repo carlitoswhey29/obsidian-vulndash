@@ -11,6 +11,7 @@ export class PollingOrchestrator {
   public constructor(private readonly feeds: VulnerabilityFeed[]) {}
 
   public async pollOnce(): Promise<Vulnerability[]> {
+    // Poll all feeds independently so one outage does not block other sources.
     const results = await Promise.allSettled(
       this.feeds.map(async (feed) => {
         const controller = new AbortController();
@@ -36,6 +37,7 @@ export class PollingOrchestrator {
       const vulns = await this.pollOnce();
       callback(vulns);
       if (this.running) {
+        // setTimeout avoids overlapping polls if the previous cycle runs long.
         window.setTimeout(() => {
           void execute();
         }, intervalMs);
@@ -61,6 +63,7 @@ export class PollingOrchestrator {
           console.warn(`Unknown error fetching from ${feed.name} (attempt ${attempt})`);
         }
         if (attempt === 4) return [];
+        // Exponential backoff reduces pressure on remote APIs during transient failures.
         await sleep(delay);
         delay = Math.min(delay * 2, 30_000);
       }
