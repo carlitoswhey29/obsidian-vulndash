@@ -11,6 +11,15 @@ export interface ColumnVisibility {
   publishedAt: boolean;
 }
 
+export interface SyncControls {
+  maxPages: number;
+  maxItems: number;
+  retryCount: number;
+  backoffBaseMs: number;
+  overlapWindowMs: number;
+  debugHttpMetadata: boolean;
+}
+
 export interface VulnDashSettings {
   pollingIntervalMs: number;
   pollOnStartup: boolean;
@@ -33,4 +42,6 @@ export interface VulnDashSettings {
   autoNoteCreationEnabled: boolean;
   autoNoteFolder: string;
   sbomPath: string;
+  syncControls: SyncControls;
+  sourceSyncCursor: Record<string, string>;
 }

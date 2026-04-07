@@ -39,3 +39,32 @@ VulnDash is an Obsidian plugin that provides a near-live CVE dashboard with poll
 
 - Prefer setting a GitHub token (fine-grained) and NVD API key to reduce rate limits.
 - Use filtering settings to reduce noise (keywords, products, minimum CVSS/severity).
+
+## Sync Architecture
+
+- **Transport vs client responsibilities**
+  - `HttpClient` is transport-generic and only handles HTTP execution plus typed transport errors.
+  - Source clients (`GitHubAdvisoryClient`, `NvdClient`) own pagination and source-specific query mapping.
+- **Cursor semantics**
+  - `since` always means *fetch records changed since timestamp*.
+  - Cursor state is persisted per source (`sourceSyncCursor`) and advanced only after a successful source sync.
+- **Merge behavior**
+  - Polling merges by stable source-aware key (`<source>:<id>`).
+  - Incoming records replace cached records only when normalized freshness (`updatedAt`) is newer.
+  - Dedup is deterministic across pages and overlap windows.
+- **Retry / rate-limit handling**
+  - Retryable errors (timeouts, network, 429, transient 5xx) use exponential backoff.
+  - `Retry-After` is honored for rate limits.
+  - Retry budget is bounded and sync fails cleanly when exhausted.
+- **Per-source isolation**
+  - Each source sync runs with independent cursor, warnings, retries, and result status.
+  - Partial source failure does not discard successful records from other sources.
+
+### Polling cycle sequence (simplified)
+
+1. Read source cursor.
+2. Apply overlap window to compute effective `since`.
+3. Fetch paginated data with source client bounds (`maxPages`, `maxItems`).
+4. Deduplicate and merge into cache with freshness checks.
+5. If full source sync succeeds, advance only that source cursor.
+6. Emit structured sync result/log summary.

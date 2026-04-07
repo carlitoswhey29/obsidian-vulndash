@@ -1,19 +1,25 @@
-import type { VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
+import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 
+export interface FeedSyncControls {
+  maxPages: number;
+  maxItems: number;
+}
+
 type GitHubAdvisoryItem = {
-    ghsa_id?: string;
-    summary?: string;
-    description?: string;
-    published_at?: string;
-    severity?: 'low' | 'moderate' | 'high' | 'critical';
-    cvss?: { score?: number };
-    html_url?: string;
-    vulnerabilities?: Array<{ package?: { name?: string } }>;
-  };
+  ghsa_id?: string;
+  summary?: string;
+  description?: string;
+  published_at?: string;
+  updated_at?: string;
+  severity?: 'low' | 'moderate' | 'high' | 'critical';
+  cvss?: { score?: number };
+  html_url?: string;
+  vulnerabilities?: Array<{ package?: { name?: string } }>;
+};
 
 type GitHubSecurityResponse = GitHubAdvisoryItem[] | { items?: GitHubAdvisoryItem[] };
 
@@ -27,44 +33,108 @@ const severityToScore = (severity: string | undefined): number => {
   }
 };
 
+export const extractNextLink = (linkHeader: string | undefined): string | undefined => {
+  if (!linkHeader) return undefined;
+  const segments = linkHeader.split(',');
+  for (const segment of segments) {
+    const match = segment.match(/<([^>]+)>\s*;\s*rel="([^"]+)"/);
+    if (match?.[2] === 'next') {
+      return match[1];
+    }
+  }
+  return undefined;
+};
+
 export class GitHubAdvisoryClient implements VulnerabilityFeed {
   public readonly name = 'GitHub';
 
-  public constructor(private readonly httpClient: IHttpClient, private readonly token: string) {}
+  public constructor(
+    private readonly httpClient: IHttpClient,
+    private readonly token: string,
+    private readonly controls: FeedSyncControls
+  ) {}
 
-  public async fetchVulnerabilities(signal: AbortSignal): Promise<Vulnerability[]> {
+  public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github+json'
     };
-    if (this.token) {
-      headers.Authorization = `Bearer ${this.token}`;
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+
+    const warnings: string[] = [];
+    const dedup = new Set<string>();
+    const collected: Vulnerability[] = [];
+    const seenUrls = new Set<string>();
+    let pagesFetched = 0;
+    let nextUrl: string | undefined = this.buildInitialUrl(options.since);
+
+    while (nextUrl && pagesFetched < this.controls.maxPages && collected.length < this.controls.maxItems) {
+      if (seenUrls.has(nextUrl)) {
+        warnings.push('duplicate_next_url');
+        break;
+      }
+      seenUrls.add(nextUrl);
+
+      const response = await this.httpClient.getJson<GitHubSecurityResponse>(nextUrl, headers, options.signal);
+      pagesFetched += 1;
+      const advisories = Array.isArray(response.data) ? response.data : (response.data.items ?? []);
+      let newItems = 0;
+
+      for (const advisory of advisories) {
+        if (collected.length >= this.controls.maxItems) {
+          warnings.push('max_items_reached');
+          break;
+        }
+        const normalized = this.normalize(advisory);
+        const key = `${normalized.source}:${normalized.id}`;
+        if (dedup.has(key)) continue;
+        dedup.add(key);
+        collected.push(normalized);
+        newItems += 1;
+      }
+
+      if (newItems === 0) {
+        warnings.push('no_new_unique_records');
+        break;
+      }
+
+      nextUrl = extractNextLink(response.headers.link);
     }
 
-    const data = await this.httpClient.getJson<GitHubSecurityResponse>(
-      'https://api.github.com/advisories?per_page=25',
-      headers,
-      signal
-    );
+    if (pagesFetched >= this.controls.maxPages) warnings.push('max_pages_reached');
 
-    const advisories = Array.isArray(data) ? data : (data.items ?? []);
+    return {
+      vulnerabilities: collected,
+      pagesFetched,
+      warnings,
+      retriesPerformed: 0
+    };
+  }
 
-    return advisories.map((advisory) => {
-      const score = advisory.cvss?.score ?? severityToScore(advisory.severity);
-      const summary = advisory.description ?? advisory.summary ?? 'No summary provided';
+  private buildInitialUrl(since: string | undefined): string {
+    const params = new URLSearchParams({ per_page: '100' });
+    if (since) params.set('since', since);
+    return `https://api.github.com/advisories?${params.toString()}`;
+  }
 
-      return {
-        id: sanitizeText(advisory.ghsa_id ?? 'unknown'),
-        source: this.name,
-        title: sanitizeText(advisory.summary ?? advisory.ghsa_id ?? 'GitHub Advisory'),
-        summary: sanitizeMarkdown(summary),
-        publishedAt: advisory.published_at ?? new Date(0).toISOString(),
-        cvssScore: score,
-        severity: classifySeverity(score),
-        references: [sanitizeUrl(advisory.html_url ?? '')].filter(Boolean),
-        affectedProducts: (advisory.vulnerabilities ?? [])
-          .map((v) => sanitizeText(v.package?.name ?? ''))
-          .filter(Boolean)
-      } satisfies Vulnerability;
-    });
+  private normalize(advisory: GitHubAdvisoryItem): Vulnerability {
+    const score = advisory.cvss?.score ?? severityToScore(advisory.severity);
+    const summary = advisory.description ?? advisory.summary ?? 'No summary provided';
+    const publishedAt = advisory.published_at ?? new Date(0).toISOString();
+    const updatedAt = advisory.updated_at ?? publishedAt;
+
+    return {
+      id: sanitizeText(advisory.ghsa_id ?? 'unknown'),
+      source: this.name,
+      title: sanitizeText(advisory.summary ?? advisory.ghsa_id ?? 'GitHub Advisory'),
+      summary: sanitizeMarkdown(summary),
+      publishedAt,
+      updatedAt,
+      cvssScore: score,
+      severity: classifySeverity(score),
+      references: [sanitizeUrl(advisory.html_url ?? '')].filter(Boolean),
+      affectedProducts: (advisory.vulnerabilities ?? [])
+        .map((v) => sanitizeText(v.package?.name ?? ''))
+        .filter(Boolean)
+    };
   }
 }
