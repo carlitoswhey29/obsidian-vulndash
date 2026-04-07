@@ -1,6 +1,7 @@
 import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
+import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { FeedSyncControls } from './GitHubAdvisoryClient';
@@ -26,6 +27,7 @@ interface NvdResponse {
 
 export class NvdClient implements VulnerabilityFeed {
   public readonly name = 'NVD';
+  private readonly productNameNormalizer = new ProductNameNormalizer();
 
   public constructor(
     private readonly httpClient: IHttpClient,
@@ -105,7 +107,7 @@ export class NvdClient implements VulnerabilityFeed {
     const affectedProducts = (cve.configurations ?? [])
       .flatMap((config) => config.nodes ?? [])
       .flatMap((node) => node.cpeMatch ?? [])
-      .map((m) => sanitizeText(m.criteria ?? ''))
+      .map((m) => this.productNameNormalizer.normalize(sanitizeText(m.criteria ?? '')))
       .filter(Boolean);
 
     const publishedAt = cve.published ?? new Date(0).toISOString();

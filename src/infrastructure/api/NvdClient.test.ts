@@ -57,3 +57,41 @@ test('reuses fixed since/until window across NVD pages and advances via API meta
   assert.match(seenUrls[0] ?? '', /startIndex=0/);
   assert.match(seenUrls[1] ?? '', /startIndex=2/);
 });
+
+test('normalizes CPE affected products into readable names', async () => {
+  const response: HttpResponse<unknown> = {
+    status: 200,
+    headers: {},
+    data: {
+      startIndex: 0,
+      resultsPerPage: 1,
+      totalResults: 1,
+      vulnerabilities: [{
+        cve: {
+          id: 'CVE-2026-1000',
+          published: '2026-02-01T00:00:00.000Z',
+          lastModified: '2026-02-01T01:00:00.000Z',
+          configurations: [{
+            nodes: [{
+              cpeMatch: [
+                { criteria: 'cpe:2.3:a:apache:tomcat:10.1.31:*:*:*:*:*:*:*' },
+                { criteria: 'cpe:2.3:a:nodejs:node.js:*:*:*:*:*:*:*:*' }
+              ]
+            }]
+          }]
+        }
+      }]
+    }
+  };
+
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return response as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, '', { maxItems: 10, maxPages: 2 });
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.deepEqual(result.vulnerabilities[0]?.affectedProducts, ['Apache Tomcat 10.1.31', 'Nodejs Node.js']);
+});
