@@ -3,6 +3,10 @@ import { severityOrder } from '../../domain/entities/Severity';
 import type { VulnDashSettings } from './types';
 
 export class AlertEngine {
+  /**
+   * Applies user-configured filtering rules in a deterministic order:
+   * 1) numeric thresholds, 2) product filters, 3) keyword/regex filters.
+   */
   public filter(vulnerabilities: Vulnerability[], settings: VulnDashSettings): Vulnerability[] {
     const keywords = settings.keywordFilters.map((v) => v.toLowerCase());
     const products = settings.productFilters.map((v) => v.toLowerCase());
@@ -24,6 +28,10 @@ export class AlertEngine {
     });
   }
 
+  /**
+   * Compiles case-insensitive regex filters from user input.
+   * Invalid patterns are ignored so one bad rule does not disable filtering.
+   */
   private getRegexFilters(filters: string[]): RegExp[] {
     const regexFilters: RegExp[] = [];
     for (const filter of filters) {
