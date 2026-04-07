@@ -1,27 +1,57 @@
 import esbuild from 'esbuild';
 import process from 'node:process';
+import { mkdir, copyFile } from 'node:fs/promises';
+import console from 'node:console';
 
-const production = process.argv.includes("production");
+const production = process.argv.includes('production');
 
-const context = await esbuild.context({
+async function copyPluginAssets() {
+  await mkdir('dist', { recursive: true });
+  await copyFile('manifest.json', 'dist/manifest.json');
+  await copyFile('styles.css', 'dist/styles.css');
+}
+
+const ctx = await esbuild.context({
   entryPoints: ['src/main.ts'],
   bundle: true,
   format: 'cjs',
   platform: 'browser',
   target: 'es2021',
-  outfile: 'main.js',
-  sourcemap: production ? false : "inline",
-  minify: true,
+  outfile: production ? 'dist/main.js' : 'main.js',
+  sourcemap: production ? false : 'inline',
+  minify: production,
   logLevel: 'info',
   legalComments: 'none',
   external: ['obsidian', 'electron', '@codemirror/*'],
   metafile: true,
-  treeShaking: true
+  treeShaking: true,
+  plugins: [
+    {
+      name: 'copy-plugin-assets',
+      setup(build) {
+        build.onEnd(async (result) => {
+          if (result.errors.length > 0) {
+            return;
+          }
+
+          if (production) {
+            try {
+              await copyPluginAssets();
+              console.log('Copied manifest.json and styles.css to dist/');
+            } catch (error) {
+              console.error('Failed to copy plugin assets:', error);
+              process.exitCode = 1;
+            }
+          }
+        });
+      }
+    }
+  ]
 });
 
 if (production) {
-  await context.rebuild();
-  await context.dispose();
+  await ctx.rebuild();
+  await ctx.dispose();
 } else {
-  await context.watch();
+  await ctx.watch();
 }
