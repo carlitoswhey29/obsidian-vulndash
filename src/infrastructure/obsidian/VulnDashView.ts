@@ -158,7 +158,8 @@ export class VulnDashView extends ItemView {
           }
         }
         if (column.key === 'title') {
-          row.createEl('td', { text: sanitizeText(vuln.title) });
+          const titleCell = row.createEl('td', { text: sanitizeText(vuln.title), cls: 'vulndash-title' });
+          titleCell.addClass('markdown-preview-view');
         }
         if (column.key === 'source') {
           row.createEl('td', { text: sanitizeText(vuln.source) });

@@ -16,8 +16,14 @@
 }
 
 .vulndash-new {
+  margin-left: 6px;
   font-weight: 700;
   color: var(--text-accent);
+}
+
+.vulndash-title {
+  width: 100%;
+  border-collapse: collapse;
 }
 
 .vulndash-critical {
@@ -107,4 +113,52 @@
   border-radius: 4px;
   margin: 0.5rem 0;
   display: block;
+}
+
+.vulndash-table /* Column Widths for 9-column layout */
+.vulndash-table th:nth-child(1),
+.vulndash-table td:nth-child(1) { width: 15%; } /* ID */
+
+.vulndash-table th:nth-child(2),
+.vulndash-table td:nth-child(2) { width: 45%; } /* Title */
+
+.vulndash-table th:nth-child(3),
+.vulndash-table td:nth-child(3) { width: 10%; } /* Source */
+
+.vulndash-table th:nth-child(4),
+.vulndash-table td:nth-child(4) { width: 10%; } /* Severity */
+
+.vulndash-table th:nth-child(5),
+.vulndash-table td:nth-child(5) { width: 5%; } /* CVSS */
+
+.vulndash-table th:nth-child(6),
+.vulndash-table td:nth-child(6) { width: 15%; } /* Published */
+
+
+/* Mobile Responsiveness */
+@media (max-width: 900px) {
+  .vulndash-view {
+    padding: var(--size-4-2);
+  }
+
+  .vulndash-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .vulndash-controls select,
+  .vulndash-controls input[type="search"] {
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .vulndash-table {
+    min-width: 1100px;
+    font-size: var(--font-ui-smaller);
+  }
+
+  .vulndash-table thead th,
+  .vulndash-table tbody td {
+    padding: var(--size-4-1) var(--size-4-2);
+  }
 }
