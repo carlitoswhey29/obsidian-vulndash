@@ -25,6 +25,7 @@ const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
 
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
+  pollOnStartup: true,
   keywordFilters: [],
   productFilters: [],
   minSeverity: 'MEDIUM',
@@ -57,6 +58,7 @@ interface SbomDocument {
 export default class VulnDashPlugin extends Plugin {
   private settings: VulnDashSettings = DEFAULT_SETTINGS;
   private stopPolling: (() => void) | null = null;
+  private pollingEnabled = false;
   private readonly alertEngine = new AlertEngine();
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
@@ -66,9 +68,14 @@ export default class VulnDashPlugin extends Plugin {
     await this.loadSettings();
 
     this.registerView(VULNDASH_VIEW_TYPE, (leaf) =>
-      new VulnDashView(leaf, async () => {
-        await this.refreshNow();
-      })
+      new VulnDashView(
+        leaf,
+        async () => {
+          await this.refreshNow();
+        },
+        async () => this.togglePolling(),
+        () => this.pollingEnabled
+      )
     );
 
     this.addRibbonIcon('shield-alert', 'Open VulnDash', () => {
@@ -85,15 +92,14 @@ export default class VulnDashPlugin extends Plugin {
 
     this.addSettingTab(new VulnDashSettingTab(this.app, this));
 
-    this.startPolling();
+    if (this.settings.pollOnStartup) {
+      this.startPolling();
+    }
     await this.activateView();
   }
 
   public override onunload(): void {
-    if (this.stopPolling) {
-      this.stopPolling();
-      this.stopPolling = null;
-    }
+    this.stopPollingLoop();
   }
 
   public async refreshNow(): Promise<void> {
@@ -120,11 +126,24 @@ export default class VulnDashPlugin extends Plugin {
     await this.saveSettings();
     this.restartPolling();
     this.updateViewSettings();
+    this.updateViewPollingState();
     await this.refreshNow();
   }
 
   public getSettings(): VulnDashSettings {
     return this.settings;
+  }
+
+  public async togglePolling(): Promise<void> {
+    if (this.pollingEnabled) {
+      this.stopPollingLoop();
+      this.updateViewPollingState();
+      return;
+    }
+
+    this.startPolling();
+    this.updateViewPollingState();
+    await this.refreshNow();
   }
 
   public async importProductFiltersFromSbom(): Promise<void> {
@@ -264,7 +283,12 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private startPolling(): void {
+    if (this.pollingEnabled) {
+      return;
+    }
+
     const orchestrator = this.createOrchestrator();
+    this.pollingEnabled = true;
     this.stopPolling = orchestrator.start(this.settings.pollingIntervalMs, (vulns) => {
       this.cachedVulnerabilities = vulns;
       this.lastFetchAt = Date.now();
@@ -273,11 +297,19 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private restartPolling(): void {
+    const wasPolling = this.pollingEnabled;
+    this.stopPollingLoop();
+    if (wasPolling || this.settings.pollOnStartup) {
+      this.startPolling();
+    }
+  }
+
+  private stopPollingLoop(): void {
     if (this.stopPolling) {
       this.stopPolling();
       this.stopPolling = null;
     }
-    this.startPolling();
+    this.pollingEnabled = false;
   }
 
   private createOrchestrator(): PollingOrchestrator {
@@ -293,6 +325,16 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     return new PollingOrchestrator(feeds);
+  }
+
+  private updateViewPollingState(): void {
+    const leaves = this.app.workspace.getLeavesOfType(VULNDASH_VIEW_TYPE);
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      if (view instanceof VulnDashView) {
+        view.setPollingEnabled(this.pollingEnabled);
+      }
+    }
   }
 
   private updateView(vulnerabilities: Vulnerability[]): void {
@@ -334,6 +376,7 @@ export default class VulnDashPlugin extends Plugin {
 
     this.app.workspace.revealLeaf(leaf);
     this.updateViewSettings();
+    this.updateViewPollingState();
     await this.refreshNow();
   }
 
