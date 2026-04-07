@@ -26,10 +26,19 @@ export class VulnDashView extends ItemView {
   };
   private localSearchQuery = '';
   private readonly onRefresh: () => Promise<void>;
+  private readonly onTogglePolling: () => Promise<void>;
+  private readonly isPollingEnabled: () => boolean;
 
-  public constructor(leaf: WorkspaceLeaf, onRefresh: () => Promise<void>) {
+  public constructor(
+    leaf: WorkspaceLeaf,
+    onRefresh: () => Promise<void>,
+    onTogglePolling: () => Promise<void>,
+    isPollingEnabled: () => boolean
+  ) {
     super(leaf);
     this.onRefresh = onRefresh;
+    this.onTogglePolling = onTogglePolling;
+    this.isPollingEnabled = isPollingEnabled;
   }
 
   public getViewType(): string {
@@ -50,6 +59,10 @@ export class VulnDashView extends ItemView {
     this.maxResults = settings.maxResults;
     this.colorCodedSeverity = settings.colorCodedSeverity;
     this.columnVisibility = settings.columnVisibility;
+    this.render();
+  }
+
+  public setPollingEnabled(_enabled: boolean): void {
     this.render();
   }
 
@@ -99,6 +112,13 @@ export class VulnDashView extends ItemView {
     searchInput.addEventListener('input', (e) => {
       this.localSearchQuery = (e.target as HTMLInputElement).value.toLowerCase();
       this.render(); // Re-render table on type
+    });
+
+    const pollingBtn = controls.createEl('button', {
+      text: this.isPollingEnabled() ? 'Stop polling' : 'Start polling'
+    });
+    pollingBtn.addEventListener('click', () => {
+      void this.onTogglePolling();
     });
 
     const refreshBtn = controls.createEl('button', { text: 'Refresh now' });
