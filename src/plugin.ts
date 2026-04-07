@@ -18,6 +18,7 @@ import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/Vuln
 
 const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
   id: true,
+  title: true,
   source: true,
   severity: true,
   cvssScore: true,
@@ -503,6 +504,7 @@ class VulnDashSettingTab extends PluginSettingTab {
 
     const columnDefs: Array<{ key: keyof ColumnVisibility; label: string }> = [
       { key: 'id', label: 'ID' },
+      { key: 'title', label: 'Title' },
       { key: 'source', label: 'Source' },
       { key: 'severity', label: 'Severity' },
       { key: 'cvssScore', label: 'CVSS' },

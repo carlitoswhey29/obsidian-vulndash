@@ -6,7 +6,7 @@ import { sanitizeText } from '../utils/sanitize';
 
 export const VULNDASH_VIEW_TYPE = 'vulndash-dashboard-view';
 
-type SortKey = 'publishedAt' | 'severity' | 'cvssScore' | 'id' | 'source';
+type SortKey = 'publishedAt' | 'severity' | 'cvssScore' | 'id' | 'source' | 'title';
 
 export class VulnDashView extends ItemView {
   private vulnerabilities: Vulnerability[] = [];
@@ -17,6 +17,7 @@ export class VulnDashView extends ItemView {
   private colorCodedSeverity = true;
   private columnVisibility: VulnDashSettings['columnVisibility'] = {
     id: true,
+    title: true,
     source: true,
     severity: true,
     cvssScore: true,
@@ -107,6 +108,7 @@ export class VulnDashView extends ItemView {
 
     const columns: Array<{ key: SortKey; label: string; visible: boolean }> = [
       { key: 'id', label: 'ID', visible: this.columnVisibility.id },
+      { key: 'title', label: 'Title', visible: this.columnVisibility.title },
       { key: 'source', label: 'Source', visible: this.columnVisibility.source },
       { key: 'severity', label: 'Severity', visible: this.columnVisibility.severity },
       { key: 'cvssScore', label: 'CVSS', visible: this.columnVisibility.cvssScore },
@@ -154,6 +156,9 @@ export class VulnDashView extends ItemView {
           if (this.newItems.has(vuln.id)) {
             idText.addClass('vulndash-new');
           }
+        }
+        if (column.key === 'title') {
+          row.createEl('td', { text: sanitizeText(vuln.title) });
         }
         if (column.key === 'source') {
           row.createEl('td', { text: sanitizeText(vuln.source) });

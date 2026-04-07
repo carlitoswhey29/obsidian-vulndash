@@ -4,6 +4,7 @@ export type DashboardSortOrder = 'publishedAt' | 'cvssScore';
 
 export interface ColumnVisibility {
   id: boolean;
+  title: boolean;
   source: boolean;
   severity: boolean;
   cvssScore: boolean;
