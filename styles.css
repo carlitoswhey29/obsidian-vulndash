@@ -5,14 +5,14 @@
 
 .vulndash-table th,
 .vulndash-table td {
-  border-bottom: 1px solid var(--background-modifier-border);
-  padding: 0.35rem;
+  padding: 0.5rem;
   text-align: left;
   vertical-align: top;
 }
 
 .vulndash-table th {
   cursor: pointer;
+  border-bottom: 2px solid var(--background-modifier-border);
 }
 
 .vulndash-new {
@@ -34,5 +34,77 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.vulndash-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.vulndash-search-bar {
+  padding: 4px 8px;
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  border-radius: 4px;
+}
+
+/* --- ROW BOUNDARIES & HOVER STATES --- */
+.vulndash-item-boundary td {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.vulndash-row-main {
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+}
+
+.vulndash-row-main:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.vulndash-row-details {
+  background-color: var(--background-secondary);
+}
+
+.vulndash-row-details td {
+  padding: 1rem 1.5rem;
+  border-bottom: 2px solid var(--background-modifier-border);
+}
+
+.vulndash-expand-indicator {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  margin-right: 6px;
+  display: inline-block;
+  width: 1.2em;
+}
+
+/* --- MARKDOWN CODE BLOCK FIXES --- */
+.vulndash-summary pre {
+  background-color: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.vulndash-summary code {
+  background-color: var(--background-secondary-alt);
+  color: var(--text-accent);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+}
+
+.vulndash-summary img {
+  max-width: 100%;
+  max-height: 250px;
+  object-fit: scale-down;
+  border-radius: 4px;
+  margin: 0.5rem 0;
+  display: block;
 }

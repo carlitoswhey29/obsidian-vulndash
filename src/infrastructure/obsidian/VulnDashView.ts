@@ -13,7 +13,7 @@ export class VulnDashView extends ItemView {
   private newItems = new Set<string>();
   private sortKey: SortKey = 'publishedAt';
   private sortDesc = true;
-  private maxResults = 100;
+  private maxResults = 100; // Default value, will be overridden by settings
   private colorCodedSeverity = true;
   private columnVisibility: VulnDashSettings['columnVisibility'] = {
     id: true,
@@ -22,6 +22,7 @@ export class VulnDashView extends ItemView {
     cvssScore: true,
     publishedAt: true
   };
+  private localSearchQuery = '';
   private readonly onRefresh: () => Promise<void>;
 
   public constructor(leaf: WorkspaceLeaf, onRefresh: () => Promise<void>) {
@@ -77,13 +78,29 @@ export class VulnDashView extends ItemView {
     const { contentEl } = this;
     contentEl.empty();
 
+    // 1. Header & Quick Filter Search Bar
     const header = contentEl.createDiv({ cls: 'vulndash-header' });
     header.createEl('h2', { text: 'VulnDash Dashboard' });
-    const refreshBtn = header.createEl('button', { text: 'Refresh now' });
+
+    const controls = header.createDiv({ cls: 'vulndash-controls' });
+
+    const searchInput = controls.createEl('input', {
+      type: 'text',
+      placeholder: 'Filter results...',
+      cls: 'vulndash-search-bar'
+    });
+    searchInput.value = this.localSearchQuery;
+    searchInput.addEventListener('input', (e) => {
+      this.localSearchQuery = (e.target as HTMLInputElement).value.toLowerCase();
+      this.render(); // Re-render table on type
+    });
+
+    const refreshBtn = controls.createEl('button', { text: 'Refresh now' });
     refreshBtn.addEventListener('click', () => {
       void this.onRefresh();
     });
 
+    // 2. Table Setup
     const table = contentEl.createEl('table', { cls: 'vulndash-table' });
     const thead = table.createEl('thead');
     const headRow = thead.createEl('tr');
@@ -111,47 +128,64 @@ export class VulnDashView extends ItemView {
     }
 
     const tbody = table.createEl('tbody');
-    const data = this.getSorted().slice(0, this.maxResults);
+
+    // 3. Apply Local Search Filter
+    let data = this.getSorted().slice(0, this.maxResults);
+    if (this.localSearchQuery) {
+      data = data.filter(v =>
+        v.title.toLowerCase().includes(this.localSearchQuery) ||
+        v.id.toLowerCase().includes(this.localSearchQuery) ||
+        v.source.toLowerCase().includes(this.localSearchQuery)
+      );
+    }
+
+    // 4. Render Rows with Folding Logic
     for (const vuln of data) {
-      const row = tbody.createEl('tr');
+      // Main Row
+      const row = tbody.createEl('tr', { cls: 'vulndash-row-main vulndash-item-boundary' });
 
       for (const column of visibleColumns) {
         if (column.key === 'id') {
-          const idCell = row.createEl('td', { text: sanitizeText(vuln.id) });
+          const idCell = row.createEl('td');
+          // Add fold indicator
+          idCell.createSpan({ text: '[+]', cls: 'vulndash-expand-indicator' });
+          const idText = idCell.createSpan({ text: sanitizeText(vuln.id) });
+
           if (this.newItems.has(vuln.id)) {
-            idCell.addClass('vulndash-new');
+            idText.addClass('vulndash-new');
           }
         }
-
         if (column.key === 'source') {
           row.createEl('td', { text: sanitizeText(vuln.source) });
         }
-
         if (column.key === 'severity') {
           const sev = row.createEl('td', { text: sanitizeText(vuln.severity) });
-          if (this.colorCodedSeverity && vuln.severity === 'CRITICAL') {
-            sev.addClass('vulndash-critical');
-          }
-          if (this.colorCodedSeverity && vuln.severity === 'HIGH') {
-            sev.addClass('vulndash-high');
-          }
+          if (this.colorCodedSeverity && vuln.severity === 'CRITICAL') sev.addClass('vulndash-critical');
+          if (this.colorCodedSeverity && vuln.severity === 'HIGH') sev.addClass('vulndash-high');
         }
-
         if (column.key === 'cvssScore') {
           row.createEl('td', { text: vuln.cvssScore.toFixed(1) });
         }
-
         if (column.key === 'publishedAt') {
           row.createEl('td', { text: new Date(vuln.publishedAt).toLocaleString() });
         }
       }
 
-      const details = tbody.createEl('tr');
+      // Details Row
+      const details = tbody.createEl('tr', { cls: 'vulndash-row-details' });
+      details.style.display = 'none'; // Hidden by default
+
       const detailsCell = details.createEl('td', { attr: { colspan: String(Math.max(visibleColumns.length, 1)) } });
-      detailsCell.createEl('strong', { text: sanitizeText(vuln.title) });
+      detailsCell.createEl('h3', { text: sanitizeText(vuln.title), cls: 'vulndash-details-title' });
+
       const summaryEl = detailsCell.createDiv({ cls: 'vulndash-summary' });
+      // Add markdown-preview-view class so Obsidian knows to format it like standard markdown
+      summaryEl.addClass('markdown-preview-view');
       await MarkdownRenderer.render(this.app, vuln.summary, summaryEl, '', this);
+
       const refs = detailsCell.createDiv();
+      refs.createEl('strong', { text: 'References:' });
+      refs.createEl('br');
       for (const ref of vuln.references.slice(0, 3)) {
         const a = refs.createEl('a', { text: ref });
         a.href = ref;
@@ -159,6 +193,17 @@ export class VulnDashView extends ItemView {
         a.rel = 'noopener noreferrer';
         refs.createEl('br');
       }
+
+      // Interaction Logic
+      row.addEventListener('click', () => {
+        const isHidden = details.style.display === 'none';
+        details.style.display = isHidden ? 'table-row' : 'none';
+
+        const indicator = row.querySelector('.vulndash-expand-indicator');
+        if (indicator) {
+          indicator.textContent = isHidden ? '[-]' : '[+]';
+        }
+      });
     }
   }
 

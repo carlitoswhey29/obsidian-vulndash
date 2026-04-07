@@ -3,7 +3,7 @@ import process from 'node:process';
 
 const production = process.argv.includes("production");
 
-await esbuild.build({
+const context = await esbuild.context({
   entryPoints: ['src/main.ts'],
   bundle: true,
   format: 'cjs',
