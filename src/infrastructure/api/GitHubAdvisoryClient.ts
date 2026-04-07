@@ -1,8 +1,8 @@
 import type { VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
+import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
-import { HttpClient } from './HttpClient';
 
 type GitHubAdvisoryItem = {
     ghsa_id?: string;
@@ -30,7 +30,7 @@ const severityToScore = (severity: string | undefined): number => {
 export class GitHubAdvisoryClient implements VulnerabilityFeed {
   public readonly name = 'GitHub';
 
-  public constructor(private readonly httpClient: HttpClient, private readonly token: string) {}
+  public constructor(private readonly httpClient: IHttpClient, private readonly token: string) {}
 
   public async fetchVulnerabilities(signal: AbortSignal): Promise<Vulnerability[]> {
     const headers: Record<string, string> = {

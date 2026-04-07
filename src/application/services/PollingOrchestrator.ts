@@ -1,4 +1,5 @@
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
+import { HttpRequestError } from '../ports/HttpRequestError';
 import type { VulnerabilityFeed } from '../ports/VulnerabilityFeed';
 
 const sleep = async (ms: number): Promise<void> => {
@@ -57,6 +58,22 @@ export class PollingOrchestrator {
       try {
         return await feed.fetchVulnerabilities(signal);
       } catch (error: unknown) {
+        if (error instanceof HttpRequestError) {
+          console.warn(
+            `Error fetching from ${feed.name} (attempt ${attempt}): ${error.message}`
+          );
+          if (!error.retryable) {
+            return [];
+          }
+          if (attempt === 4) {
+            return [];
+          }
+          const nextDelay = error.retryAfterMs ?? delay;
+          await sleep(nextDelay);
+          delay = Math.min(delay * 2, 30_000);
+          continue;
+        }
+
         if (error instanceof Error) {
           console.warn(`Error fetching from ${feed.name} (attempt ${attempt}): ${error.message}`);
         } else {
