@@ -17,6 +17,7 @@ export interface SyncControls {
   retryCount: number;
   backoffBaseMs: number;
   overlapWindowMs: number;
+  bootstrapLookbackMs: number;
   debugHttpMetadata: boolean;
 }
 

@@ -91,12 +91,20 @@ export class PollingOrchestrator {
   private async syncFeed(feed: VulnerabilityFeed): Promise<SyncResult> {
     const startedAt = new Date().toISOString();
     const warnings: string[] = [];
+    const until = startedAt;
     const existingCursor = this.sourceSyncCursor[feed.name];
     const since = existingCursor
       ? new Date(Date.parse(existingCursor) - this.controls.overlapWindowMs).toISOString()
-      : undefined;
+      : new Date(Date.parse(until) - this.controls.bootstrapLookbackMs).toISOString();
 
-    console.info('[vulndash.sync.start]', { source: feed.name, cursor: existingCursor, since, overlapWindowMs: this.controls.overlapWindowMs });
+    console.info('[vulndash.sync.start]', {
+      source: feed.name,
+      cursor: existingCursor,
+      since,
+      until,
+      overlapWindowMs: this.controls.overlapWindowMs,
+      bootstrapLookbackMs: this.controls.bootstrapLookbackMs
+    });
 
     let retriesPerformed = 0;
     let pagesFetched = 0;
@@ -105,7 +113,7 @@ export class PollingOrchestrator {
     let itemsDeduplicated = 0;
 
     try {
-      const fetchResult = await this.fetchWithBackoff(feed, since);
+      const fetchResult = await this.fetchWithBackoff(feed, since, until);
       retriesPerformed = fetchResult.retriesPerformed;
       pagesFetched = fetchResult.pagesFetched;
       itemsFetched = fetchResult.vulnerabilities.length;
@@ -124,10 +132,7 @@ export class PollingOrchestrator {
         warnings: fetchResult.warnings
       });
 
-      const maxCursor = this.computeMaxCursor(fetchResult.vulnerabilities);
-      if (maxCursor) {
-        this.sourceSyncCursor[feed.name] = maxCursor;
-      }
+      this.sourceSyncCursor[feed.name] = until;
 
       const successResult: SyncResult = {
         source: feed.name,
@@ -163,7 +168,7 @@ export class PollingOrchestrator {
     }
   }
 
-  private async fetchWithBackoff(feed: VulnerabilityFeed, since: string | undefined): Promise<{
+  private async fetchWithBackoff(feed: VulnerabilityFeed, since: string | undefined, until: string): Promise<{
     vulnerabilities: Vulnerability[];
     pagesFetched: number;
     warnings: string[];
@@ -176,7 +181,8 @@ export class PollingOrchestrator {
       try {
         const response = await feed.fetchVulnerabilities({
           signal: new AbortController().signal,
-          ...(since ? { since } : {})
+          ...(since ? { since } : {}),
+          until
         });
         return {
           vulnerabilities: response.vulnerabilities,
@@ -233,13 +239,6 @@ export class PollingOrchestrator {
     }
 
     return { itemsMerged, itemsDeduplicated };
-  }
-
-  private computeMaxCursor(items: Vulnerability[]): string | undefined {
-    return items.reduce<string | undefined>((max, item) => {
-      if (!max) return item.updatedAt;
-      return Date.parse(item.updatedAt) > Date.parse(max) ? item.updatedAt : max;
-    }, undefined);
   }
 
   private cacheKey(item: Vulnerability): string {

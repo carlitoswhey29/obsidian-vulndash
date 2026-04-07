@@ -52,6 +52,7 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
     retryCount: 3,
     backoffBaseMs: 1_000,
     overlapWindowMs: 180_000,
+    bootstrapLookbackMs: 86_400_000,
     debugHttpMetadata: false
   },
   sourceSyncCursor: {}
@@ -410,6 +411,10 @@ export default class VulnDashPlugin extends Plugin {
       columnVisibility: {
         ...DEFAULT_COLUMN_VISIBILITY,
         ...(loadedSettings?.columnVisibility ?? {})
+      },
+      syncControls: {
+        ...DEFAULT_SETTINGS.syncControls,
+        ...(loadedSettings?.syncControls ?? {})
       }
     };
 
