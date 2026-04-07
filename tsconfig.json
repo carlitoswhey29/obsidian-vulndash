@@ -11,8 +11,16 @@
     "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "lib": ["DOM", "ES2021"],
-    "types": ["obsidian"]
+    "lib": [
+      "DOM",
+      "ES2021"
+    ],
+    "types": [
+      "obsidian",
+      "node"
+    ]
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts"
+  ]
 }

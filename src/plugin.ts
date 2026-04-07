@@ -45,7 +45,16 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
   enableGithubFeed: true,
   autoNoteCreationEnabled: false,
   autoNoteFolder: 'VulnDash Alerts',
-  sbomPath: ''
+  sbomPath: '',
+  syncControls: {
+    maxPages: 10,
+    maxItems: 500,
+    retryCount: 3,
+    backoffBaseMs: 1_000,
+    overlapWindowMs: 180_000,
+    debugHttpMetadata: false
+  },
+  sourceSyncCursor: {}
 };
 
 interface SbomComponent {
@@ -113,10 +122,12 @@ export default class VulnDashPlugin extends Plugin {
 
     const orchestrator = this.createOrchestrator();
     try {
-      const all = await orchestrator.pollOnce();
-      this.cachedVulnerabilities = all;
+      const outcome = await orchestrator.pollOnce();
+      this.cachedVulnerabilities = outcome.vulnerabilities;
+      this.settings.sourceSyncCursor = outcome.sourceSyncCursor;
+      await this.saveSettings();
       this.lastFetchAt = Date.now();
-      await this.processData(all);
+      await this.processData(outcome.vulnerabilities);
     } catch {
       new Notice('VulnDash refresh failed. Check your network or API tokens.');
     }
@@ -287,10 +298,12 @@ export default class VulnDashPlugin extends Plugin {
 
     const orchestrator = this.createOrchestrator();
     this.pollingEnabled = true;
-    this.stopPolling = orchestrator.start(this.settings.pollingIntervalMs, (vulns) => {
-      this.cachedVulnerabilities = vulns;
+    this.stopPolling = orchestrator.start(this.settings.pollingIntervalMs, (outcome) => {
+      this.cachedVulnerabilities = outcome.vulnerabilities;
+      this.settings.sourceSyncCursor = outcome.sourceSyncCursor;
+      void this.saveSettings();
       this.lastFetchAt = Date.now();
-      void this.processData(vulns);
+      void this.processData(outcome.vulnerabilities);
     });
   }
 
@@ -315,14 +328,17 @@ export default class VulnDashPlugin extends Plugin {
     const feeds = [];
 
     if (this.settings.enableNvdFeed) {
-      feeds.push(new NvdClient(client, this.settings.nvdApiKey));
+      feeds.push(new NvdClient(client, this.settings.nvdApiKey, this.settings.syncControls));
     }
 
     if (this.settings.enableGithubFeed) {
-      feeds.push(new GitHubAdvisoryClient(client, this.settings.githubToken));
+      feeds.push(new GitHubAdvisoryClient(client, this.settings.githubToken, this.settings.syncControls));
     }
 
-    return new PollingOrchestrator(feeds);
+    return new PollingOrchestrator(feeds, this.settings.syncControls, {
+      cache: this.cachedVulnerabilities,
+      sourceSyncCursor: this.settings.sourceSyncCursor
+    });
   }
 
   private updateViewPollingState(): void {

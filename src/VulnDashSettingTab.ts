@@ -173,6 +173,69 @@ export class VulnDashSettingTab extends PluginSettingTab {
         );
     }
 
+
+    containerEl.createEl('h3', { text: 'Sync Controls' });
+
+    new Setting(containerEl)
+      .setName('Max pages per sync')
+      .addText((text) => text.setValue(String(settings.syncControls.maxPages)).onChange(async (value) => {
+        const maxPages = Number.parseInt(value, 10);
+        if (Number.isNaN(maxPages) || maxPages < 1) return;
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          syncControls: { ...this.plugin.getSettings().syncControls, maxPages }
+        });
+      })
+      );
+
+    new Setting(containerEl)
+      .setName('Max items per sync')
+      .addText((text) => text.setValue(String(settings.syncControls.maxItems)).onChange(async (value) => {
+        const maxItems = Number.parseInt(value, 10);
+        if (Number.isNaN(maxItems) || maxItems < 1) return;
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          syncControls: { ...this.plugin.getSettings().syncControls, maxItems }
+        });
+      })
+      );
+
+    new Setting(containerEl)
+      .setName('Retry count')
+      .addText((text) => text.setValue(String(settings.syncControls.retryCount)).onChange(async (value) => {
+        const retryCount = Number.parseInt(value, 10);
+        if (Number.isNaN(retryCount) || retryCount < 0) return;
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          syncControls: { ...this.plugin.getSettings().syncControls, retryCount }
+        });
+      })
+      );
+
+    new Setting(containerEl)
+      .setName('Backoff base (ms)')
+      .addText((text) => text.setValue(String(settings.syncControls.backoffBaseMs)).onChange(async (value) => {
+        const backoffBaseMs = Number.parseInt(value, 10);
+        if (Number.isNaN(backoffBaseMs) || backoffBaseMs < 100) return;
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          syncControls: { ...this.plugin.getSettings().syncControls, backoffBaseMs }
+        });
+      })
+      );
+
+    new Setting(containerEl)
+      .setName('Overlap window (seconds)')
+      .addText((text) => text.setValue(String(Math.floor(settings.syncControls.overlapWindowMs / 1000))).onChange(async (value) => {
+        const seconds = Number.parseInt(value, 10);
+        if (Number.isNaN(seconds) || seconds < 0) return;
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          syncControls: { ...this.plugin.getSettings().syncControls, overlapWindowMs: seconds * 1000 }
+        });
+      })
+      );
+
     containerEl.createEl('h3', { text: 'Advanced Filtering' });
 
     new Setting(containerEl)
