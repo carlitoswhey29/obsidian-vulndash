@@ -2,7 +2,7 @@ import type { VulnerabilityFeed } from '../../application/ports/VulnerabilityFee
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
-import { HttpClient } from './HttpClient';
+import type { IHttpClient } from '../../application/ports/IHttpClient';
 
 interface NvdResponse {
   vulnerabilities?: Array<{
@@ -22,7 +22,7 @@ interface NvdResponse {
 export class NvdClient implements VulnerabilityFeed {
   public readonly name = 'NVD';
 
-  public constructor(private readonly httpClient: HttpClient, private readonly apiKey: string) {}
+  public constructor(private readonly httpClient: IHttpClient, private readonly apiKey: string) {}
 
   public async fetchVulnerabilities(signal: AbortSignal): Promise<Vulnerability[]> {
     const params = new URLSearchParams({ resultsPerPage: '25' });

@@ -27,6 +27,8 @@ export class VulnDashView extends ItemView {
   private localSearchQuery = '';
   private tableContainer: HTMLDivElement | null = null;
   private filterDebounceHandle: number | null = null;
+  private pollingButton: HTMLButtonElement | null = null;
+  private renderedSummaryIds = new Set<string>();
   private readonly onRefresh: () => Promise<void>;
   private readonly onTogglePolling: () => Promise<void>;
   private readonly isPollingEnabled: () => boolean;
@@ -85,6 +87,7 @@ export class VulnDashView extends ItemView {
     const pollingBtn = controls.createEl('button', {
       text: this.isPollingEnabled() ? 'Stop polling' : 'Start polling'
     });
+    this.pollingButton = pollingBtn;
     pollingBtn.addEventListener('click', () => {
       void this.onTogglePolling();
     });
@@ -107,6 +110,10 @@ export class VulnDashView extends ItemView {
   }
 
   public setPollingEnabled(_enabled: boolean): void {
+    if (this.pollingButton !== null) {
+      this.pollingButton.textContent = this.isPollingEnabled() ? 'Stop polling' : 'Start polling';
+      return;
+    }
     this.render();
   }
 
@@ -120,6 +127,9 @@ export class VulnDashView extends ItemView {
     }
     this.expandedItems = new Set(
       Array.from(this.expandedItems).filter((id) => current.has(id))
+    );
+    this.renderedSummaryIds = new Set(
+      Array.from(this.renderedSummaryIds).filter((id) => current.has(id))
     );
     this.vulnerabilities = vulnerabilities;
     this.render();
@@ -231,10 +241,10 @@ export class VulnDashView extends ItemView {
       const detailsCell = details.createEl('td', { attr: { colspan: String(Math.max(visibleColumns.length, 1)) } });
       detailsCell.createEl('h3', { text: sanitizeText(vuln.title), cls: 'vulndash-details-title' });
 
-      const summaryEl = detailsCell.createDiv({ cls: 'vulndash-summary' });
-      // Use Obsidian's preview styling to keep markdown summaries visually consistent.
-      summaryEl.addClass('markdown-preview-view');
-      await MarkdownRenderer.render(this.app, vuln.summary, summaryEl, '', this);
+      const summaryEl = detailsCell.createDiv({ cls: 'vulndash-summary markdown-preview-view' });
+      if (isExpanded) {
+        await this.renderSummaryIfNeeded(vuln, summaryEl);
+      }
 
       const refs = detailsCell.createDiv();
       refs.createEl('strong', { text: 'References:' });
@@ -252,6 +262,7 @@ export class VulnDashView extends ItemView {
         details.style.display = isHidden ? 'table-row' : 'none';
         if (isHidden) {
           this.expandedItems.add(vuln.id);
+          void this.renderSummaryIfNeeded(vuln, summaryEl);
         } else {
           this.expandedItems.delete(vuln.id);
         }
@@ -262,6 +273,14 @@ export class VulnDashView extends ItemView {
         }
       });
     }
+  }
+
+  private async renderSummaryIfNeeded(vulnerability: Vulnerability, container: HTMLDivElement): Promise<void> {
+    if (this.renderedSummaryIds.has(vulnerability.id)) {
+      return;
+    }
+    await MarkdownRenderer.render(this.app, vulnerability.summary, container, '', this);
+    this.renderedSummaryIds.add(vulnerability.id);
   }
 
   private getSorted(): Vulnerability[] {
