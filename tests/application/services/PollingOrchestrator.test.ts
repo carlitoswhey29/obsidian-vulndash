@@ -107,3 +107,41 @@ test('uses bootstrap lookback and fixed until window when cursor is missing', as
   assert.equal(untilMs - sinceMs, controls.bootstrapLookbackMs);
   assert.equal(outcome.sourceSyncCursor['nvd-default'], calls[0]?.until);
 });
+
+test('mixed outcome reports GitHub failure while retaining successful NVD data', async () => {
+  const nvdFeed: VulnerabilityFeed = {
+    id: 'nvd-default',
+    name: 'NVD',
+    async fetchVulnerabilities() {
+      return {
+        vulnerabilities: [{
+          id: 'CVE-2026-0001', source: 'NVD', title: 'nvd item', summary: 'nvd item',
+          publishedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+          cvssScore: 8, severity: 'HIGH', references: [], affectedProducts: []
+        }],
+        pagesFetched: 1,
+        warnings: [],
+        retriesPerformed: 0
+      };
+    }
+  };
+
+  const githubFeed: VulnerabilityFeed = {
+    id: 'github-default',
+    name: 'GitHub',
+    async fetchVulnerabilities() {
+      throw new Error('github sync failed');
+    }
+  };
+
+  const orchestrator = new PollingOrchestrator([nvdFeed, githubFeed], controls, { cache: [], sourceSyncCursor: {} });
+  const outcome = await orchestrator.pollOnce();
+
+  assert.equal(outcome.vulnerabilities.length, 1);
+  assert.equal(outcome.results.length, 2);
+  assert.equal(outcome.results[0]?.source, 'NVD');
+  assert.equal(outcome.results[0]?.success, true);
+  assert.equal(outcome.results[1]?.source, 'GitHub');
+  assert.equal(outcome.results[1]?.success, false);
+  assert.equal(outcome.results[1]?.errorSummary, 'github sync failed');
+});

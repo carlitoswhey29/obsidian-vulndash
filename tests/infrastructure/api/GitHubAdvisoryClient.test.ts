@@ -114,6 +114,40 @@ test('paginates across link headers and deduplicates advisories', async () => {
   assert.deepEqual(result.vulnerabilities.map((item) => item.id), ['GHSA-1', 'GHSA-2']);
 });
 
+test('continues pagination after a page with zero new unique advisories', async () => {
+  const responses: Array<HttpResponse<unknown>> = [
+    {
+      status: 200,
+      headers: { link: '<https://api.github.com/advisories?page=2>; rel="next"' },
+      data: [{ ghsa_id: 'GHSA-1', summary: 'one', published_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }]
+    },
+    {
+      status: 200,
+      headers: { link: '<https://api.github.com/advisories?page=3>; rel="next"' },
+      data: [{ ghsa_id: 'GHSA-1', summary: 'duplicate', published_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }]
+    },
+    {
+      status: 200,
+      headers: {},
+      data: [{ ghsa_id: 'GHSA-2', summary: 'two', published_at: '2026-01-02T00:00:00.000Z', updated_at: '2026-01-02T00:00:00.000Z' }]
+    }
+  ];
+
+  const httpClient: IHttpClient = {
+    async getJson() {
+      const next = responses.shift();
+      if (!next) throw new Error('unexpected request');
+      return next as HttpResponse<never>;
+    }
+  };
+
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+  assert.equal(result.pagesFetched, 3);
+  assert.deepEqual(result.vulnerabilities.map((item) => item.id), ['GHSA-1', 'GHSA-2']);
+  assert.ok(result.warnings.includes('no_new_unique_records'));
+});
+
 test('surfaces clear auth failure message', async () => {
   const httpClient: IHttpClient = {
     async getJson() {
