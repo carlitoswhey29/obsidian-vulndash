@@ -2,6 +2,13 @@ import { PluginSettingTab, App, Setting } from 'obsidian';
 import type { VulnDashSettings, ColumnVisibility } from './application/services/types';
 import VulnDashPlugin, { DEFAULT_SETTINGS } from './plugin';
 
+const getNvdFeed = (settings: VulnDashSettings) =>
+  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'nvd' }> =>
+    feed.type === 'nvd' && feed.id === 'nvd-default');
+const getGitHubAdvisoryFeed = (settings: VulnDashSettings) =>
+  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'github_advisory' }> =>
+    feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
+
 export class VulnDashSettingTab extends PluginSettingTab {
   public constructor(app: App, private readonly plugin: VulnDashPlugin) {
     super(app, plugin);
@@ -253,15 +260,25 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Enable NVD feed')
-      .addToggle((toggle) => toggle.setValue(settings.enableNvdFeed).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), enableNvdFeed: value });
+      .addToggle((toggle) => toggle.setValue(getNvdFeed(settings)?.enabled ?? false).onChange(async (value) => {
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          enableNvdFeed: value,
+          feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' ? { ...feed, enabled: value } : feed))
+        });
       })
       );
 
     new Setting(containerEl)
       .setName('Enable GitHub advisories feed')
-      .addToggle((toggle) => toggle.setValue(settings.enableGithubFeed).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), enableGithubFeed: value });
+      .addToggle((toggle) => toggle.setValue(getGitHubAdvisoryFeed(settings)?.enabled ?? false).onChange(async (value) => {
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          enableGithubFeed: value,
+          feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default' ? { ...feed, enabled: value } : feed))
+        });
       })
       );
 
@@ -307,8 +324,16 @@ export class VulnDashSettingTab extends PluginSettingTab {
       .setDesc('Optional. Key is stored in plugin data; avoid sharing vault config.')
       .addText((text) => {
         text.inputEl.type = 'password';
-        text.setValue(settings.nvdApiKey).onChange(async (value) => {
-          await this.plugin.updateSettings({ ...this.plugin.getSettings(), nvdApiKey: value.trim() });
+        text.setValue(getNvdFeed(settings)?.apiKey ?? settings.nvdApiKey).onChange(async (value) => {
+          const nextKey = value.trim();
+          const current = this.plugin.getSettings();
+          await this.plugin.updateSettings({
+            ...current,
+            nvdApiKey: nextKey,
+            feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+              ? { ...feed, apiKey: nextKey }
+              : feed))
+          });
         });
       });
 
@@ -317,8 +342,16 @@ export class VulnDashSettingTab extends PluginSettingTab {
       .setDesc('Optional fine-grained token for higher API limits. Never logged by plugin.')
       .addText((text) => {
         text.inputEl.type = 'password';
-        text.setValue(settings.githubToken).onChange(async (value) => {
-          await this.plugin.updateSettings({ ...this.plugin.getSettings(), githubToken: value.trim() });
+        text.setValue(getGitHubAdvisoryFeed(settings)?.token ?? settings.githubToken).onChange(async (value) => {
+          const nextToken = value.trim();
+          const current = this.plugin.getSettings();
+          await this.plugin.updateSettings({
+            ...current,
+            githubToken: nextToken,
+            feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default'
+              ? { ...feed, token: nextToken }
+              : feed))
+          });
         });
       });
   }

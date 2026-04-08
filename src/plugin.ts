@@ -5,13 +5,12 @@ import {
   WorkspaceLeaf
 } from 'obsidian';
 import { AlertEngine } from './application/services/AlertEngine';
+import { buildFeedsFromConfig } from './application/services/FeedFactory';
 import { PollingOrchestrator } from './application/services/PollingOrchestrator';
-import type { ColumnVisibility, VulnDashSettings } from './application/services/types';
+import type { ColumnVisibility, FeedConfig, VulnDashSettings } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
 import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
-import { GitHubAdvisoryClient } from './infrastructure/api/GitHubAdvisoryClient';
 import { HttpClient } from './infrastructure/api/HttpClient';
-import { NvdClient } from './infrastructure/api/NvdClient';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
 import { VulnDashSettingTab } from './VulnDashSettingTab';
 import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from './infrastructure/utils/crypto';
@@ -24,6 +23,11 @@ const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
   cvssScore: true,
   publishedAt: true
 };
+
+const DEFAULT_FEEDS: FeedConfig[] = [
+  { id: 'nvd-default', name: 'NVD', type: 'nvd', enabled: true },
+  { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true }
+];
 
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
@@ -56,7 +60,9 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
     bootstrapLookbackMs: 86_400_000,
     debugHttpMetadata: false
   },
-  sourceSyncCursor: {}
+  sourceSyncCursor: {},
+  settingsVersion: 2,
+  feeds: DEFAULT_FEEDS.map((feed) => ({ ...feed }))
 };
 
 interface SbomComponent {
@@ -66,6 +72,61 @@ interface SbomComponent {
 interface SbomDocument {
   components?: SbomComponent[];
 }
+
+const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
+
+const migrateLegacySettings = (settings: Partial<VulnDashSettings>): VulnDashSettings => {
+  const hasDynamicFeeds = Array.isArray(settings.feeds) && settings.feeds.length > 0;
+  const feeds = hasDynamicFeeds
+    ? (settings.feeds ?? []).map((feed) => cloneFeedConfig(feed))
+    : DEFAULT_FEEDS.map((feed) => cloneFeedConfig(feed));
+
+  if (!hasDynamicFeeds) {
+    const nvdFeed = feeds.find((feed): feed is Extract<FeedConfig, { type: 'nvd' }> => feed.type === 'nvd' && feed.id === 'nvd-default');
+    if (nvdFeed && settings.nvdApiKey) {
+      nvdFeed.apiKey = settings.nvdApiKey;
+    }
+    if (typeof settings.enableNvdFeed === 'boolean' && nvdFeed) {
+      nvdFeed.enabled = settings.enableNvdFeed;
+    }
+
+    const githubFeed = feeds.find((feed) => feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
+    if (githubFeed && settings.githubToken) {
+      githubFeed.token = settings.githubToken;
+    }
+    if (typeof settings.enableGithubFeed === 'boolean' && githubFeed) {
+      githubFeed.enabled = settings.enableGithubFeed;
+    }
+  }
+
+  const cursor = { ...(settings.sourceSyncCursor ?? {}) };
+  const legacyNvdCursor = cursor.NVD;
+  const legacyGithubCursor = cursor.GitHub;
+  if (legacyNvdCursor && !cursor['nvd-default']) {
+    cursor['nvd-default'] = legacyNvdCursor;
+  }
+  if (legacyGithubCursor && !cursor['github-advisories-default']) {
+    cursor['github-advisories-default'] = legacyGithubCursor;
+  }
+  delete cursor.NVD;
+  delete cursor.GitHub;
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    settingsVersion: 2,
+    feeds,
+    sourceSyncCursor: cursor,
+    columnVisibility: {
+      ...DEFAULT_COLUMN_VISIBILITY,
+      ...(settings.columnVisibility ?? {})
+    },
+    syncControls: {
+      ...DEFAULT_SETTINGS.syncControls,
+      ...(settings.syncControls ?? {})
+    }
+  };
+};
 
 export default class VulnDashPlugin extends Plugin {
   private settings: VulnDashSettings = DEFAULT_SETTINGS;
@@ -191,8 +252,8 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private async notifyOnNewItems(vulnerabilities: Vulnerability[]): Promise<void> {
-    const current = new Set(vulnerabilities.map((vulnerability) => vulnerability.id));
-    const newItems = vulnerabilities.filter((vulnerability) => !this.previousVisibleIds.has(vulnerability.id));
+    const current = new Set(vulnerabilities.map((vulnerability) => `${vulnerability.source}:${vulnerability.id}`));
+    const newItems = vulnerabilities.filter((vulnerability) => !this.previousVisibleIds.has(`${vulnerability.source}:${vulnerability.id}`));
     this.previousVisibleIds = current;
 
     if (newItems.length === 0) {
@@ -375,15 +436,7 @@ export default class VulnDashPlugin extends Plugin {
 
   private createOrchestrator(): PollingOrchestrator {
     const client = new HttpClient();
-    const feeds = [];
-
-    if (this.settings.enableNvdFeed) {
-      feeds.push(new NvdClient(client, this.settings.nvdApiKey, this.settings.syncControls));
-    }
-
-    if (this.settings.enableGithubFeed) {
-      feeds.push(new GitHubAdvisoryClient(client, this.settings.githubToken, this.settings.syncControls));
-    }
+    const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls);
 
     return new PollingOrchestrator(feeds, this.settings.syncControls, {
       cache: this.cachedVulnerabilities,
@@ -452,26 +505,35 @@ export default class VulnDashPlugin extends Plugin {
     const nvdSecret = await this.loadSecret(loadedNvd);
     const githubSecret = await this.loadSecret(loadedGithub);
 
-    this.settings = {
-      ...DEFAULT_SETTINGS,
-      ...loadedSettings,
+    const loadedFeeds = await Promise.all((loadedSettings?.feeds ?? []).map(async (feed) => {
+      if (feed.type === 'nvd') {
+        const apiKeySecret = await this.loadSecret(feed.apiKey ?? '');
+        return {
+          ...feed,
+          apiKey: apiKeySecret.value
+        };
+      }
+
+      const tokenSecret = await this.loadSecret(feed.token ?? '');
+      return {
+        ...feed,
+        token: tokenSecret.value
+      };
+    }));
+
+    const migrated = migrateLegacySettings({
+      ...(loadedSettings ?? {}),
       nvdApiKey: nvdSecret.value,
       githubToken: githubSecret.value,
-      columnVisibility: {
-        ...DEFAULT_COLUMN_VISIBILITY,
-        ...(loadedSettings?.columnVisibility ?? {})
-      },
-      syncControls: {
-        ...DEFAULT_SETTINGS.syncControls,
-        ...(loadedSettings?.syncControls ?? {})
-      }
-    };
+      feeds: loadedFeeds
+    });
+    this.settings = migrated;
 
     if (nvdSecret.decryptionFailed || githubSecret.decryptionFailed) {
       new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
     }
 
-    if (nvdSecret.needsMigration || githubSecret.needsMigration) {
+    if (nvdSecret.needsMigration || githubSecret.needsMigration || (loadedSettings?.settingsVersion ?? 0) < 2) {
       await this.saveSettings();
     }
   }
@@ -479,11 +541,27 @@ export default class VulnDashPlugin extends Plugin {
   private async saveSettings(): Promise<void> {
     const encryptedNvd = await this.serializeSecret(this.settings.nvdApiKey);
     const encryptedGithub = await this.serializeSecret(this.settings.githubToken);
+    const feeds = await Promise.all(this.settings.feeds.map(async (feed) => {
+      if (feed.type === 'nvd') {
+        return {
+          ...feed,
+          apiKey: await this.serializeSecret(feed.apiKey ?? '')
+        };
+      }
+      if (feed.token) {
+        return {
+          ...feed,
+          token: await this.serializeSecret(feed.token)
+        };
+      }
+      return { ...feed };
+    }));
 
     const dataToSave: VulnDashSettings = {
        ...this.settings,
        nvdApiKey: encryptedNvd,
-       githubToken: encryptedGithub
+       githubToken: encryptedGithub,
+       feeds
     };
 
     await this.saveData(dataToSave);

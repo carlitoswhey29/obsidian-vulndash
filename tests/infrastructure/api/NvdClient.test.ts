@@ -41,7 +41,7 @@ test('reuses fixed since/until window across NVD pages and advances via API meta
     }
   };
 
-  const client = new NvdClient(httpClient, '', { maxItems: 50, maxPages: 5 });
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 50, maxPages: 5 });
   const result = await client.fetchVulnerabilities({
     signal: new AbortController().signal,
     since: '2026-02-01T00:00:00.000Z',
@@ -90,7 +90,7 @@ test('normalizes CPE affected products into readable names', async () => {
     }
   };
 
-  const client = new NvdClient(httpClient, '', { maxItems: 10, maxPages: 2 });
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
 
   assert.deepEqual(result.vulnerabilities[0]?.affectedProducts, ['Apache Tomcat 10.1.31', 'Nodejs Node.js']);
