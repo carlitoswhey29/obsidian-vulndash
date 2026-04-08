@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractNextLink } from './GitHubAdvisoryClient';
+import { extractNextLink } from '../../../src/infrastructure/api/GitHubAdvisoryClient';
 
 test('extractNextLink parses GitHub Link header', () => {
   const link = '<https://api.github.com/advisories?page=2>; rel="next", <https://api.github.com/advisories?page=4>; rel="last"';

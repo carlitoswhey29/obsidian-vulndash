@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PollingOrchestrator } from './PollingOrchestrator';
-import type { VulnerabilityFeed } from '../ports/VulnerabilityFeed';
+import { PollingOrchestrator } from '../../../src/application/services/PollingOrchestrator';
+import type { VulnerabilityFeed } from '../../../src/application/ports/VulnerabilityFeed';
 
 const controls = {
   maxPages: 5,

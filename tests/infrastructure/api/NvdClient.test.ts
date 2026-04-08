@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NvdClient } from './NvdClient';
-import type { IHttpClient, HttpResponse } from '../../application/ports/IHttpClient';
+import { NvdClient } from '../../../src/infrastructure/api/NvdClient';
+import type { IHttpClient, HttpResponse } from '../../../src/application/ports/IHttpClient';
 
 test('reuses fixed since/until window across NVD pages and advances via API metadata', async () => {
   const seenUrls: string[] = [];
