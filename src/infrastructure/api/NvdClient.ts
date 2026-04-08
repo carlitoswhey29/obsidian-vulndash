@@ -37,9 +37,6 @@ export class NvdClient implements VulnerabilityFeed {
   ) {}
 
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
-    const headers: Record<string, string> = {};
-    if (this.apiKey) headers.apiKey = this.apiKey;
-
     const dedup = new Set<string>();
     const collected: Vulnerability[] = [];
     const warnings: string[] = [];
@@ -55,7 +52,7 @@ export class NvdClient implements VulnerabilityFeed {
       seenIndexes.add(startIndex);
 
       const url = this.buildUrl(options.since, options.until, startIndex);
-      const data = await this.httpClient.getJson<NvdResponse>(url, headers, options.signal);
+      const data = await this.httpClient.getJson<NvdResponse>(url, {}, options.signal);
       pagesFetched += 1;
 
       const items = (data.data.vulnerabilities ?? [])
@@ -91,6 +88,9 @@ export class NvdClient implements VulnerabilityFeed {
       resultsPerPage: '100',
       startIndex: String(startIndex)
     });
+    if (this.apiKey) {
+      params.set('apiKey', this.apiKey);
+    }
     if (since) {
       params.set('lastModStartDate', since);
     }
