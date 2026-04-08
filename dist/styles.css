@@ -115,12 +115,12 @@
   display: block;
 }
 
-.vulndash-table /* Column Widths for 9-column layout */
+/* Column Widths for 9-column layout */
 .vulndash-table th:nth-child(1),
-.vulndash-table td:nth-child(1) { width: 15%; } /* ID */
+.vulndash-table td:nth-child(1) { width: 18%; } /* ID */
 
 .vulndash-table th:nth-child(2),
-.vulndash-table td:nth-child(2) { width: 45%; } /* Title */
+.vulndash-table td:nth-child(2) { width: 42%; } /* Title */
 
 .vulndash-table th:nth-child(3),
 .vulndash-table td:nth-child(3) { width: 10%; } /* Source */
