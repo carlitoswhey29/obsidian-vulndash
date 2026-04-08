@@ -18,7 +18,7 @@ type GitHubRepoAdvisoryItem = {
   vulnerabilities?: Array<{ package?: { name?: string } }>;
 };
 
-type GitHubRepoAdvisoryResponse = { items?: GitHubRepoAdvisoryItem[] };
+type GitHubRepoAdvisoryResponse = GitHubRepoAdvisoryItem[] | { items?: GitHubRepoAdvisoryItem[] };
 
 const normalizeRepoPath = (repoPath: string): string => repoPath.trim().toLowerCase();
 
@@ -59,7 +59,7 @@ export class GitHubRepoClient implements VulnerabilityFeed {
     let pagesFetched = 0;
 
     const params = new URLSearchParams({ per_page: '100', affects: this.normalizedRepoPath });
-    if (options.since) params.set('since', options.since);
+    if (options.since) params.set('updated', options.since);
     let nextUrl: string | undefined = `https://api.github.com/advisories?${params.toString()}`;
 
     while (nextUrl && pagesFetched < this.controls.maxPages && collected.length < this.controls.maxItems) {
@@ -72,7 +72,7 @@ export class GitHubRepoClient implements VulnerabilityFeed {
       const response = await this.httpClient.getJson<GitHubRepoAdvisoryResponse>(nextUrl, headers, options.signal);
       pagesFetched += 1;
 
-      const advisories = response.data.items ?? [];
+      const advisories = Array.isArray(response.data) ? response.data : (response.data.items ?? []);
       let newItems = 0;
       for (const advisory of advisories) {
         if (collected.length >= this.controls.maxItems) {
