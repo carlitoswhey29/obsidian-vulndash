@@ -123,7 +123,8 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
           warning: 'no_new_unique_records',
           nextPage: extractNextLink(response.headers.link)
         });
-        break;
+        nextUrl = extractNextLink(response.headers.link);
+        continue;
       }
 
       console.info('[vulndash.github.fetch.page]', {

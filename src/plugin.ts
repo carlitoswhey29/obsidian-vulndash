@@ -7,6 +7,7 @@ import {
 import { AlertEngine } from './application/services/AlertEngine';
 import { buildFeedsFromConfig } from './application/services/FeedFactory';
 import { PollingOrchestrator } from './application/services/PollingOrchestrator';
+import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from './application/services/SyncOutcomeDiagnostics';
 import type { ColumnVisibility, FeedConfig, VulnDashSettings } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
 import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
@@ -187,6 +188,14 @@ export default class VulnDashPlugin extends Plugin {
     const orchestrator = this.createOrchestrator();
     try {
       const outcome = await orchestrator.pollOnce();
+      const syncSummaries = summarizeSyncResults(outcome.results);
+      for (const summary of syncSummaries) {
+        console.info('[vulndash.sync.feed_summary]', summary);
+      }
+      const failureNotice = buildFailureNoticeMessage(outcome.results);
+      if (failureNotice) {
+        new Notice(failureNotice);
+      }
       this.cachedVulnerabilities = outcome.vulnerabilities;
       this.settings.sourceSyncCursor = outcome.sourceSyncCursor;
       await this.saveSettings();
@@ -247,6 +256,8 @@ export default class VulnDashPlugin extends Plugin {
 
   private async processData(vulnerabilities: Vulnerability[]): Promise<void> {
     const filtered = this.alertEngine.filter(vulnerabilities, this.settings);
+    const diagnostics = buildVisibilityDiagnostics(vulnerabilities, filtered);
+    console.info('[vulndash.filter.visibility]', diagnostics);
     this.updateView(filtered);
     await this.notifyOnNewItems(filtered);
   }
