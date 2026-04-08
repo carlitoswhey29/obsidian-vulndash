@@ -95,3 +95,39 @@ test('normalizes CPE affected products into readable names', async () => {
 
   assert.deepEqual(result.vulnerabilities[0]?.affectedProducts, ['Apache Tomcat 10.1.31', 'Nodejs Node.js']);
 });
+
+test('passes apiKey in the NVD query string instead of request headers', async () => {
+  let seenUrl = '';
+  let seenHeaders: Record<string, string> | undefined;
+
+  const response: HttpResponse<unknown> = {
+    status: 200,
+    headers: {},
+    data: {
+      startIndex: 0,
+      resultsPerPage: 1,
+      totalResults: 1,
+      vulnerabilities: [{
+        cve: {
+          id: 'CVE-2026-2000',
+          published: '2026-02-01T00:00:00.000Z',
+          lastModified: '2026-02-01T01:00:00.000Z'
+        }
+      }]
+    }
+  };
+
+  const httpClient: IHttpClient = {
+    async getJson(url, headers) {
+      seenUrl = url;
+      seenHeaders = headers;
+      return response as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', 'secret-key', { maxItems: 10, maxPages: 2 });
+  await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.match(seenUrl, /apiKey=secret-key/);
+  assert.deepEqual(seenHeaders, {});
+});
