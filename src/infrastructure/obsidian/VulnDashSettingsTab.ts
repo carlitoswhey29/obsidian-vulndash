@@ -321,11 +321,13 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('NVD API key')
-      .setDesc('Optional. Key is stored in plugin data; avoid sharing vault config.')
+      .setDesc('Optional. Stored encrypted; enter a new value to replace the saved key.')
       .addText((text) => {
+        const hasExistingKey = Boolean(getNvdFeed(settings)?.apiKey ?? settings.nvdApiKey);
         text.inputEl.type = 'password';
-        text.setValue(getNvdFeed(settings)?.apiKey ?? settings.nvdApiKey).onChange(async (value) => {
+        text.setPlaceholder(hasExistingKey ? 'Saved key configured' : 'No key configured').onChange(async (value) => {
           const nextKey = value.trim();
+          if (!nextKey) return;
           const current = this.plugin.getSettings();
           await this.plugin.updateSettings({
             ...current,
@@ -335,15 +337,30 @@ export class VulnDashSettingTab extends PluginSettingTab {
               : feed))
           });
         });
+      })
+      .addButton((button) => {
+        button.setButtonText('Clear').onClick(async () => {
+          const current = this.plugin.getSettings();
+          await this.plugin.updateSettings({
+            ...current,
+            nvdApiKey: '',
+            feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+              ? { ...feed, apiKey: '' }
+              : feed))
+          });
+          this.display();
+        });
       });
 
     new Setting(containerEl)
       .setName('GitHub token')
-      .setDesc('Optional fine-grained token for higher API limits. Never logged by plugin.')
+      .setDesc('Optional fine-grained token for higher API limits. Stored encrypted; enter a new value to replace the saved token.')
       .addText((text) => {
+        const hasExistingToken = Boolean(getGitHubAdvisoryFeed(settings)?.token ?? settings.githubToken);
         text.inputEl.type = 'password';
-        text.setValue(getGitHubAdvisoryFeed(settings)?.token ?? settings.githubToken).onChange(async (value) => {
+        text.setPlaceholder(hasExistingToken ? 'Saved token configured' : 'No token configured').onChange(async (value) => {
           const nextToken = value.trim();
+          if (!nextToken) return;
           const current = this.plugin.getSettings();
           await this.plugin.updateSettings({
             ...current,
@@ -352,6 +369,19 @@ export class VulnDashSettingTab extends PluginSettingTab {
               ? { ...feed, token: nextToken }
               : feed))
           });
+        });
+      })
+      .addButton((button) => {
+        button.setButtonText('Clear').onClick(async () => {
+          const current = this.plugin.getSettings();
+          await this.plugin.updateSettings({
+            ...current,
+            githubToken: '',
+            feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default'
+              ? { ...feed, token: '' }
+              : feed))
+          });
+          this.display();
         });
       });
   }

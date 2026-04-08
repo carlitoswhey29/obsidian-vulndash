@@ -1,6 +1,6 @@
-import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
+import type { SecretProvider, VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
-import { ClientHttpError } from '../../application/ports/HttpRequestError';
+import { AuthFailureHttpError, ClientHttpError } from '../../application/ports/HttpRequestError';
 import type {
   Vulnerability,
   VulnerabilityAffectedPackage,
@@ -9,6 +9,7 @@ import type {
 } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
+import { logger } from '../utils/logger';
 
 export interface FeedSyncControls {
   maxPages: number;
@@ -100,7 +101,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
     private readonly httpClient: IHttpClient,
     public readonly id: string,
     public readonly name: string,
-    private readonly token: string,
+    private readonly tokenProvider: SecretProvider,
     private readonly controls: FeedSyncControls
   ) {}
 
@@ -110,7 +111,8 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       'X-GitHub-Api-Version': GITHUB_API_VERSION,
       'User-Agent': 'obsidian-vulndash'
     };
-    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    const token = await this.tokenProvider();
+    if (token) headers.Authorization = `Bearer ${token}`;
 
     const warnings: string[] = [];
     const dedup = new Set<string>();
@@ -126,7 +128,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       }
       seenUrls.add(nextUrl);
 
-      console.info('[vulndash.github.fetch.request]', {
+      logger.info('[vulndash.github.fetch.request]', {
         source: this.name,
         feedId: this.id,
         page: pagesFetched + 1,
@@ -160,7 +162,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
 
       if (newItems === 0) {
         warnings.push('no_new_unique_records');
-        console.info('[vulndash.github.fetch.page]', {
+        logger.info('[vulndash.github.fetch.page]', {
           source: this.name,
           feedId: this.id,
           page: pagesFetched,
@@ -174,7 +176,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
         continue;
       }
 
-      console.info('[vulndash.github.fetch.page]', {
+      logger.info('[vulndash.github.fetch.page]', {
         source: this.name,
         feedId: this.id,
         page: pagesFetched,
@@ -188,7 +190,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
 
     if (pagesFetched >= this.controls.maxPages) warnings.push('max_pages_reached');
 
-    console.info('[vulndash.github.fetch.complete]', {
+    logger.info('[vulndash.github.fetch.complete]', {
       source: this.name,
       feedId: this.id,
       pagesFetched,
@@ -210,7 +212,41 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
     return `${GITHUB_ADVISORIES_ENDPOINT}?${params.toString()}`;
   }
 
+  public async validateConnection(signal: AbortSignal): Promise<{ ok: boolean; message: string }> {
+    try {
+      const headers: Record<string, string> = {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': GITHUB_API_VERSION,
+        'User-Agent': 'obsidian-vulndash'
+      };
+      const token = await this.tokenProvider();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      await this.httpClient.getJson<GitHubSecurityResponse>(`${GITHUB_ADVISORIES_ENDPOINT}?per_page=1`, headers, signal);
+      return { ok: true, message: `${this.name} connection validated.` };
+    } catch (error: unknown) {
+      const decorated = this.decorateGitHubError(error);
+      if (decorated instanceof AuthFailureHttpError) {
+        return {
+          ok: false,
+          message: `${this.name} token may be expired, revoked, invalid, or missing advisory permissions.`
+        };
+      }
+      const message = decorated instanceof Error ? decorated.message : 'Unknown validation error';
+      return { ok: false, message };
+    }
+  }
+
   private decorateGitHubError(error: unknown): unknown {
+    if (error instanceof AuthFailureHttpError) {
+      return new AuthFailureHttpError(
+        error.authFailureReason === 'unauthorized'
+          ? 'GitHub advisories request unauthorized (401). Token may be expired, revoked, invalid, or missing.'
+          : 'GitHub advisories request forbidden (403). Token may be missing required advisory permissions, or anonymous access may be blocked.',
+        error.metadata,
+        error.authFailureReason
+      );
+    }
+
     if (!(error instanceof ClientHttpError)) return error;
 
     if (error.metadata.status === 401) {
@@ -220,11 +256,8 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       );
     }
     if (error.metadata.status === 403) {
-      const hasToken = Boolean(this.token);
       return new ClientHttpError(
-        hasToken
-          ? 'GitHub advisories request forbidden (403). Token may be missing required advisory access permissions or may be rate-limited.'
-          : 'GitHub advisories request forbidden (403). Configure a GitHub token to avoid low anonymous rate limits.',
+        'GitHub advisories request forbidden (403). Token may be missing required advisory access permissions, anonymous access may be blocked, or the request may be rate-limited.',
         error.metadata
       );
     }

@@ -1,4 +1,4 @@
-import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
+import type { SecretProvider, VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
 import type {
   Vulnerability,
   VulnerabilityAffectedPackage,
@@ -10,6 +10,7 @@ import { ProductNameNormalizer } from '../../domain/services/ProductNameNormaliz
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { FeedSyncControls } from './GitHubAdvisoryClient';
+import { AuthFailureHttpError } from '../../application/ports/HttpRequestError';
 
 interface NvdCvssMetric {
   cvssData?: { baseScore?: number };
@@ -105,7 +106,7 @@ export class NvdClient implements VulnerabilityFeed {
     private readonly httpClient: IHttpClient,
     public readonly id: string,
     public readonly name: string,
-    private readonly apiKey: string,
+    private readonly apiKeyProvider: SecretProvider,
     private readonly controls: FeedSyncControls
   ) {}
 
@@ -124,8 +125,13 @@ export class NvdClient implements VulnerabilityFeed {
       }
       seenIndexes.add(startIndex);
 
-      const url = this.buildUrl(options.since, options.until, startIndex);
-      const data = await this.httpClient.getJson<NvdResponse>(url, {}, options.signal);
+      const url = await this.buildUrl(options.since, options.until, startIndex);
+      let data;
+      try {
+        data = await this.httpClient.getJson<NvdResponse>(url, {}, options.signal);
+      } catch (error: unknown) {
+        throw this.decorateNvdError(error);
+      }
       pagesFetched += 1;
 
       const items = (data.data.vulnerabilities ?? [])
@@ -156,13 +162,14 @@ export class NvdClient implements VulnerabilityFeed {
     return { vulnerabilities: collected, pagesFetched, warnings, retriesPerformed: 0 };
   }
 
-  private buildUrl(since: string | undefined, until: string | undefined, startIndex: number): string {
+  private async buildUrl(since: string | undefined, until: string | undefined, startIndex: number): Promise<string> {
     const params = new URLSearchParams({
       resultsPerPage: '100',
       startIndex: String(startIndex)
     });
-    if (this.apiKey) {
-      params.set('apiKey', this.apiKey);
+    const apiKey = await this.apiKeyProvider();
+    if (apiKey) {
+      params.set('apiKey', apiKey);
     }
     if (since) {
       params.set('lastModStartDate', since);
@@ -171,6 +178,49 @@ export class NvdClient implements VulnerabilityFeed {
       params.set('lastModEndDate', until);
     }
     return `https://services.nvd.nist.gov/rest/json/cves/2.0?${params.toString()}`;
+  }
+
+  public async validateConnection(signal: AbortSignal): Promise<{ ok: boolean; message: string }> {
+    try {
+      await this.httpClient.getJson<NvdResponse>(await this.buildValidationUrl(), {}, signal);
+      return { ok: true, message: `${this.name} connection validated.` };
+    } catch (error: unknown) {
+      const decorated = this.decorateNvdError(error);
+      if (decorated instanceof AuthFailureHttpError) {
+        return {
+          ok: false,
+          message: `${this.name} API key may be expired, revoked, invalid, or missing required permissions.`
+        };
+      }
+      const message = decorated instanceof Error ? decorated.message : 'Unknown validation error';
+      return { ok: false, message };
+    }
+  }
+
+  private async buildValidationUrl(): Promise<string> {
+    const params = new URLSearchParams({
+      resultsPerPage: '1',
+      startIndex: '0'
+    });
+    const apiKey = await this.apiKeyProvider();
+    if (apiKey) {
+      params.set('apiKey', apiKey);
+    }
+    return `https://services.nvd.nist.gov/rest/json/cves/2.0?${params.toString()}`;
+  }
+
+  private decorateNvdError(error: unknown): unknown {
+    if (error instanceof AuthFailureHttpError) {
+      return new AuthFailureHttpError(
+        error.authFailureReason === 'unauthorized'
+          ? 'NVD request unauthorized (401). API key may be expired, revoked, invalid, or missing.'
+          : 'NVD request forbidden (403). API key may be missing required permissions.',
+        error.metadata,
+        error.authFailureReason
+      );
+    }
+
+    return error;
   }
 
   private normalize(cve: NvdCveRecord): Vulnerability {

@@ -1,4 +1,5 @@
 import {
+  AuthFailureHttpError,
   ClientHttpError,
   HttpRequestError,
   RateLimitHttpError,
@@ -9,12 +10,14 @@ import {
 import type { VulnerabilityFeed } from '../ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import type { SyncControls } from './types';
+import { logger } from '../../infrastructure/utils/logger';
 
 const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, ms));
 };
 
 export interface SyncResult {
+  feedId: string;
   source: string;
   startedAt: string;
   completedAt: string;
@@ -26,6 +29,9 @@ export interface SyncResult {
   retriesPerformed: number;
   warnings: string[];
   errorSummary?: string;
+  authFailure?: {
+    reason: 'unauthorized' | 'forbidden';
+  };
 }
 
 interface PollingState {
@@ -97,7 +103,7 @@ export class PollingOrchestrator {
       ? new Date(Date.parse(existingCursor) - this.controls.overlapWindowMs).toISOString()
       : new Date(Date.parse(until) - this.controls.bootstrapLookbackMs).toISOString();
 
-    console.info('[vulndash.sync.start]', {
+    logger.info('[vulndash.sync.start]', {
       source: feed.name,
       feedId: feed.id,
       cursor: existingCursor,
@@ -124,7 +130,7 @@ export class PollingOrchestrator {
       itemsMerged = merged.itemsMerged;
       itemsDeduplicated = merged.itemsDeduplicated;
 
-      console.info('[vulndash.sync.merge]', {
+      logger.info('[vulndash.sync.merge]', {
         source: feed.name,
         feedId: feed.id,
         fetched: fetchResult.vulnerabilities.length,
@@ -135,7 +141,7 @@ export class PollingOrchestrator {
       });
 
       this.sourceSyncCursor[feed.id] = until;
-      console.info('[vulndash.sync.cursor.advance]', {
+      logger.info('[vulndash.sync.cursor.advance]', {
         source: feed.name,
         feedId: feed.id,
         previousCursor: existingCursor,
@@ -144,6 +150,7 @@ export class PollingOrchestrator {
       });
 
       const successResult: SyncResult = {
+        feedId: feed.id,
         source: feed.name,
         startedAt,
         completedAt: new Date().toISOString(),
@@ -155,11 +162,12 @@ export class PollingOrchestrator {
         retriesPerformed,
         warnings
       };
-      console.info('[vulndash.sync.success]', successResult);
+      logger.info('[vulndash.sync.success]', successResult);
       return successResult;
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown sync error';
+      const message = this.buildErrorSummary(error);
       const failureResult: SyncResult = {
+        feedId: feed.id,
         source: feed.name,
         startedAt,
         completedAt: new Date().toISOString(),
@@ -170,17 +178,28 @@ export class PollingOrchestrator {
         pagesFetched,
         retriesPerformed,
         warnings,
-        errorSummary: message
+        errorSummary: message,
+        ...(error instanceof AuthFailureHttpError ? { authFailure: { reason: error.authFailureReason } } : {})
       };
-      console.info('[vulndash.sync.cursor.skip]', {
+      logger.info('[vulndash.sync.cursor.skip]', {
         source: feed.name,
         feedId: feed.id,
         cursorRetained: existingCursor,
         reason: 'sync_failed'
       });
-      console.warn('[vulndash.sync.failure]', failureResult);
+      logger.warn('[vulndash.sync.failure]', failureResult);
       return failureResult;
     }
+  }
+
+  private buildErrorSummary(error: unknown): string {
+    if (error instanceof AuthFailureHttpError) {
+      return error.authFailureReason === 'unauthorized'
+        ? 'Authentication failed. Token or API key may be expired, revoked, or invalid.'
+        : 'Authorization failed. Token or API key may be missing required permissions.';
+    }
+
+    return error instanceof Error ? error.message : 'Unknown sync error';
   }
 
   private async fetchWithBackoff(feed: VulnerabilityFeed, since: string | undefined, until: string): Promise<{
