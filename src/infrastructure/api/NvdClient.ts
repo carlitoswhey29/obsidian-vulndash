@@ -92,10 +92,12 @@ export class NvdClient implements VulnerabilityFeed {
       params.set('apiKey', this.apiKey);
     }
     if (since) {
-      params.set('lastModStartDate', since);
+      params.set('pubStartDate', since);
+      // params.set('lastModStartDate', since);
     }
     if (until) {
-      params.set('lastModEndDate', until);
+      params.set('pubEndDate', until);
+      // params.set('lastModEndDate', until);
     }
     return `https://services.nvd.nist.gov/rest/json/cves/2.0?${params.toString()}`;
   }
