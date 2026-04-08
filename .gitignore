@@ -28,3 +28,4 @@ coverage/
 sbom.json
 dist/
 
+schemas/
