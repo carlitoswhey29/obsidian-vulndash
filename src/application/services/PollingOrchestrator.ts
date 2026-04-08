@@ -135,6 +135,13 @@ export class PollingOrchestrator {
       });
 
       this.sourceSyncCursor[feed.id] = until;
+      console.info('[vulndash.sync.cursor.advance]', {
+        source: feed.name,
+        feedId: feed.id,
+        previousCursor: existingCursor,
+        nextCursor: until,
+        reason: 'full_sync_success'
+      });
 
       const successResult: SyncResult = {
         source: feed.name,
@@ -165,6 +172,12 @@ export class PollingOrchestrator {
         warnings,
         errorSummary: message
       };
+      console.info('[vulndash.sync.cursor.skip]', {
+        source: feed.name,
+        feedId: feed.id,
+        cursorRetained: existingCursor,
+        reason: 'sync_failed'
+      });
       console.warn('[vulndash.sync.failure]', failureResult);
       return failureResult;
     }
