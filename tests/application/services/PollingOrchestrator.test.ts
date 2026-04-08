@@ -16,6 +16,7 @@ const controls = {
 test('advances cursor only on successful source sync', async () => {
   let githubUntil: string | undefined;
   const successFeed: VulnerabilityFeed = {
+    id: 'github-default',
     name: 'GitHub',
     async fetchVulnerabilities(options) {
       githubUntil = options.until;
@@ -33,6 +34,7 @@ test('advances cursor only on successful source sync', async () => {
   };
 
   const failFeed: VulnerabilityFeed = {
+    id: 'nvd-default',
     name: 'NVD',
     async fetchVulnerabilities() {
       throw new Error('boom');
@@ -41,16 +43,17 @@ test('advances cursor only on successful source sync', async () => {
 
   const orchestrator = new PollingOrchestrator([successFeed, failFeed], controls, {
     cache: [],
-    sourceSyncCursor: { GitHub: '2026-01-01T00:00:00.000Z', NVD: '2026-01-01T00:00:00.000Z' }
+    sourceSyncCursor: { 'github-default': '2026-01-01T00:00:00.000Z', 'nvd-default': '2026-01-01T00:00:00.000Z' }
   });
 
   const outcome = await orchestrator.pollOnce();
-  assert.equal(outcome.sourceSyncCursor.GitHub, githubUntil);
-  assert.equal(outcome.sourceSyncCursor.NVD, '2026-01-01T00:00:00.000Z');
+  assert.equal(outcome.sourceSyncCursor['github-default'], githubUntil);
+  assert.equal(outcome.sourceSyncCursor['nvd-default'], '2026-01-01T00:00:00.000Z');
 });
 
 test('idempotent merge keeps newest record', async () => {
   const feed: VulnerabilityFeed = {
+    id: 'github-default',
     name: 'GitHub',
     async fetchVulnerabilities() {
       return {
@@ -82,6 +85,7 @@ test('idempotent merge keeps newest record', async () => {
 test('uses bootstrap lookback and fixed until window when cursor is missing', async () => {
   const calls: Array<{ since?: string; until?: string }> = [];
   const feed: VulnerabilityFeed = {
+    id: 'nvd-default',
     name: 'NVD',
     async fetchVulnerabilities(options) {
       calls.push({
@@ -101,5 +105,5 @@ test('uses bootstrap lookback and fixed until window when cursor is missing', as
   const sinceMs = Date.parse(calls[0]?.since ?? '');
   const untilMs = Date.parse(calls[0]?.until ?? '');
   assert.equal(untilMs - sinceMs, controls.bootstrapLookbackMs);
-  assert.equal(outcome.sourceSyncCursor.NVD, calls[0]?.until);
+  assert.equal(outcome.sourceSyncCursor['nvd-default'], calls[0]?.until);
 });

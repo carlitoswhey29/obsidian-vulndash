@@ -1,15 +1,12 @@
-import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
+import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
+import type { FeedSyncControls } from './GitHubAdvisoryClient';
+import { extractNextLink } from './GitHubAdvisoryClient';
 
-export interface FeedSyncControls {
-  maxPages: number;
-  maxItems: number;
-}
-
-export type GitHubAdvisoryItem = {
+type GitHubRepoAdvisoryItem = {
   ghsa_id?: string;
   summary?: string;
   description?: string;
@@ -21,7 +18,9 @@ export type GitHubAdvisoryItem = {
   vulnerabilities?: Array<{ package?: { name?: string } }>;
 };
 
-type GitHubSecurityResponse = GitHubAdvisoryItem[] | { items?: GitHubAdvisoryItem[] };
+type GitHubRepoAdvisoryResponse = { items?: GitHubRepoAdvisoryItem[] };
+
+const normalizeRepoPath = (repoPath: string): string => repoPath.trim().toLowerCase();
 
 const severityToScore = (severity: string | undefined): number => {
   switch (severity) {
@@ -33,26 +32,19 @@ const severityToScore = (severity: string | undefined): number => {
   }
 };
 
-export const extractNextLink = (linkHeader: string | undefined): string | undefined => {
-  if (!linkHeader) return undefined;
-  const segments = linkHeader.split(',');
-  for (const segment of segments) {
-    const match = segment.match(/<([^>]+)>\s*;\s*rel="([^"]+)"/);
-    if (match?.[2] === 'next') {
-      return match[1];
-    }
-  }
-  return undefined;
-};
+export class GitHubRepoClient implements VulnerabilityFeed {
+  private readonly normalizedRepoPath: string;
 
-export class GitHubAdvisoryClient implements VulnerabilityFeed {
   public constructor(
     private readonly httpClient: IHttpClient,
     public readonly id: string,
     public readonly name: string,
     private readonly token: string,
+    repoPath: string,
     private readonly controls: FeedSyncControls
-  ) {}
+  ) {
+    this.normalizedRepoPath = normalizeRepoPath(repoPath);
+  }
 
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
     const headers: Record<string, string> = {
@@ -65,7 +57,10 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
     const collected: Vulnerability[] = [];
     const seenUrls = new Set<string>();
     let pagesFetched = 0;
-    let nextUrl: string | undefined = this.buildInitialUrl(options.since);
+
+    const params = new URLSearchParams({ per_page: '100', affects: this.normalizedRepoPath });
+    if (options.since) params.set('since', options.since);
+    let nextUrl: string | undefined = `https://api.github.com/advisories?${params.toString()}`;
 
     while (nextUrl && pagesFetched < this.controls.maxPages && collected.length < this.controls.maxItems) {
       if (seenUrls.has(nextUrl)) {
@@ -74,17 +69,18 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       }
       seenUrls.add(nextUrl);
 
-      const response = await this.httpClient.getJson<GitHubSecurityResponse>(nextUrl, headers, options.signal);
+      const response = await this.httpClient.getJson<GitHubRepoAdvisoryResponse>(nextUrl, headers, options.signal);
       pagesFetched += 1;
-      const advisories = Array.isArray(response.data) ? response.data : (response.data.items ?? []);
-      let newItems = 0;
 
+      const advisories = response.data.items ?? [];
+      let newItems = 0;
       for (const advisory of advisories) {
         if (collected.length >= this.controls.maxItems) {
           warnings.push('max_items_reached');
           break;
         }
-        const normalized = this.normalize(advisory, this.name);
+
+        const normalized = this.normalize(advisory);
         const key = `${normalized.source}:${normalized.id}`;
         if (dedup.has(key)) continue;
         dedup.add(key);
@@ -110,21 +106,16 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
     };
   }
 
-  protected buildInitialUrl(since: string | undefined): string {
-    const params = new URLSearchParams({ per_page: '100' });
-    if (since) params.set('since', since);
-    return `https://api.github.com/advisories?${params.toString()}`;
-  }
-
-  protected normalize(advisory: GitHubAdvisoryItem, sourceLabel: string): Vulnerability {
+  private normalize(advisory: GitHubRepoAdvisoryItem): Vulnerability {
     const score = advisory.cvss?.score ?? severityToScore(advisory.severity);
     const summary = advisory.description ?? advisory.summary ?? 'No summary provided';
     const publishedAt = advisory.published_at ?? new Date(0).toISOString();
     const updatedAt = advisory.updated_at ?? publishedAt;
+    const source = `GitHub:${this.normalizedRepoPath}`;
 
     return {
       id: sanitizeText(advisory.ghsa_id ?? 'unknown'),
-      source: sourceLabel,
+      source,
       title: sanitizeText(advisory.summary ?? advisory.ghsa_id ?? 'GitHub Advisory'),
       summary: sanitizeMarkdown(summary),
       publishedAt,

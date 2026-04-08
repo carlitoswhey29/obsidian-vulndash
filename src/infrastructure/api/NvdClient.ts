@@ -26,11 +26,12 @@ interface NvdResponse {
 }
 
 export class NvdClient implements VulnerabilityFeed {
-  public readonly name = 'NVD';
   private readonly productNameNormalizer = new ProductNameNormalizer();
 
   public constructor(
     private readonly httpClient: IHttpClient,
+    public readonly id: string,
+    public readonly name: string,
     private readonly apiKey: string,
     private readonly controls: FeedSyncControls
   ) {}
@@ -91,7 +92,6 @@ export class NvdClient implements VulnerabilityFeed {
       startIndex: String(startIndex)
     });
     if (since) {
-      // NVD incremental mapping: query CVEs changed since cursor.
       params.set('lastModStartDate', since);
     }
     if (until) {

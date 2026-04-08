@@ -92,13 +92,14 @@ export class PollingOrchestrator {
     const startedAt = new Date().toISOString();
     const warnings: string[] = [];
     const until = startedAt;
-    const existingCursor = this.sourceSyncCursor[feed.name];
+    const existingCursor = this.sourceSyncCursor[feed.id];
     const since = existingCursor
       ? new Date(Date.parse(existingCursor) - this.controls.overlapWindowMs).toISOString()
       : new Date(Date.parse(until) - this.controls.bootstrapLookbackMs).toISOString();
 
     console.info('[vulndash.sync.start]', {
       source: feed.name,
+      feedId: feed.id,
       cursor: existingCursor,
       since,
       until,
@@ -125,6 +126,7 @@ export class PollingOrchestrator {
 
       console.info('[vulndash.sync.merge]', {
         source: feed.name,
+        feedId: feed.id,
         fetched: fetchResult.vulnerabilities.length,
         merged: merged.itemsMerged,
         deduplicated: merged.itemsDeduplicated,
@@ -132,7 +134,7 @@ export class PollingOrchestrator {
         warnings: fetchResult.warnings
       });
 
-      this.sourceSyncCursor[feed.name] = until;
+      this.sourceSyncCursor[feed.id] = until;
 
       const successResult: SyncResult = {
         source: feed.name,
