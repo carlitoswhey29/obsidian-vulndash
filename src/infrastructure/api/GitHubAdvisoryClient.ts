@@ -1,5 +1,6 @@
 import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
+import { ClientHttpError } from '../../application/ports/HttpRequestError';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
@@ -22,6 +23,8 @@ export type GitHubAdvisoryItem = {
 };
 
 type GitHubSecurityResponse = GitHubAdvisoryItem[] | { items?: GitHubAdvisoryItem[] };
+const GITHUB_ADVISORIES_ENDPOINT = 'https://api.github.com/advisories';
+const GITHUB_API_VERSION = '2022-11-28';
 
 const severityToScore = (severity: string | undefined): number => {
   switch (severity) {
@@ -56,7 +59,9 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
 
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
     const headers: Record<string, string> = {
-      Accept: 'application/vnd.github+json'
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': GITHUB_API_VERSION,
+      'User-Agent': 'obsidian-vulndash'
     };
     if (this.token) headers.Authorization = `Bearer ${this.token}`;
 
@@ -74,7 +79,21 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       }
       seenUrls.add(nextUrl);
 
-      const response = await this.httpClient.getJson<GitHubSecurityResponse>(nextUrl, headers, options.signal);
+      console.info('[vulndash.github.fetch.request]', {
+        source: this.name,
+        feedId: this.id,
+        page: pagesFetched + 1,
+        url: nextUrl,
+        since: options.since,
+        until: options.until
+      });
+
+      let response;
+      try {
+        response = await this.httpClient.getJson<GitHubSecurityResponse>(nextUrl, headers, options.signal);
+      } catch (error: unknown) {
+        throw this.decorateGitHubError(error);
+      }
       pagesFetched += 1;
       const advisories = Array.isArray(response.data) ? response.data : (response.data.items ?? []);
       let newItems = 0;
@@ -94,13 +113,40 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
 
       if (newItems === 0) {
         warnings.push('no_new_unique_records');
+        console.info('[vulndash.github.fetch.page]', {
+          source: this.name,
+          feedId: this.id,
+          page: pagesFetched,
+          status: response.status,
+          itemCount: advisories.length,
+          newUniqueItems: newItems,
+          warning: 'no_new_unique_records',
+          nextPage: extractNextLink(response.headers.link)
+        });
         break;
       }
 
+      console.info('[vulndash.github.fetch.page]', {
+        source: this.name,
+        feedId: this.id,
+        page: pagesFetched,
+        status: response.status,
+        itemCount: advisories.length,
+        newUniqueItems: newItems,
+        nextPage: extractNextLink(response.headers.link)
+      });
       nextUrl = extractNextLink(response.headers.link);
     }
 
     if (pagesFetched >= this.controls.maxPages) warnings.push('max_pages_reached');
+
+    console.info('[vulndash.github.fetch.complete]', {
+      source: this.name,
+      feedId: this.id,
+      pagesFetched,
+      itemsFetched: collected.length,
+      warnings
+    });
 
     return {
       vulnerabilities: collected,
@@ -113,7 +159,29 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
   protected buildInitialUrl(since: string | undefined): string {
     const params = new URLSearchParams({ per_page: '100' });
     if (since) params.set('updated', since);
-    return `https://api.github.com/advisories?${params.toString()}`;
+    return `${GITHUB_ADVISORIES_ENDPOINT}?${params.toString()}`;
+  }
+
+  private decorateGitHubError(error: unknown): unknown {
+    if (!(error instanceof ClientHttpError)) return error;
+
+    if (error.metadata.status === 401) {
+      return new ClientHttpError(
+        'GitHub advisories request unauthorized (401). Check token validity for the configured GitHub feed.',
+        error.metadata
+      );
+    }
+    if (error.metadata.status === 403) {
+      const hasToken = Boolean(this.token);
+      return new ClientHttpError(
+        hasToken
+          ? 'GitHub advisories request forbidden (403). Token may be missing required advisory access permissions or may be rate-limited.'
+          : 'GitHub advisories request forbidden (403). Configure a GitHub token to avoid low anonymous rate limits.',
+        error.metadata
+      );
+    }
+
+    return error;
   }
 
   protected normalize(advisory: GitHubAdvisoryItem, sourceLabel: string): Vulnerability {
