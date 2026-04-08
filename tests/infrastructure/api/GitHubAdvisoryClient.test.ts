@@ -67,7 +67,7 @@ test('maps incremental cursor to GitHub updated filter', async () => {
     since: '2026-02-01T00:00:00.000Z'
   });
 
-  assert.match(seenUrl, /updated=2026-02-01T00%3A00%3A00.000Z/);
+  assert.match(seenUrl, /since=2026-02-01T00%3A00%3A00.000Z/);
 });
 
 test('handles empty advisory results', async () => {
