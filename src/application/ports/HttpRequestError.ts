@@ -3,7 +3,10 @@ export interface HttpErrorMetadata {
   headers?: Record<string, string>;
   url: string;
   retryAfterMs?: number;
+  authFailureReason?: AuthFailureReason;
 }
+
+export type AuthFailureReason = 'unauthorized' | 'forbidden';
 
 export abstract class HttpRequestError extends Error {
   public readonly retryable: boolean;
@@ -38,6 +41,16 @@ export class RateLimitHttpError extends HttpRequestError {
 export class ClientHttpError extends HttpRequestError {
   public constructor(message: string, metadata: HttpErrorMetadata) {
     super('ClientHttpError', message, false, metadata);
+  }
+}
+
+export class AuthFailureHttpError extends ClientHttpError {
+  public readonly authFailureReason: AuthFailureReason;
+
+  public constructor(message: string, metadata: HttpErrorMetadata, reason: AuthFailureReason) {
+    super(message, { ...metadata, authFailureReason: reason });
+    this.name = 'AuthFailureHttpError';
+    this.authFailureReason = reason;
   }
 }
 

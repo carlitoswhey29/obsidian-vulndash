@@ -10,11 +10,12 @@ import { PollingOrchestrator } from './application/services/PollingOrchestrator'
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from './application/services/SyncOutcomeDiagnostics';
 import type { ColumnVisibility, FeedConfig, VulnDashSettings } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
-import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
 import { HttpClient } from './infrastructure/api/HttpClient';
+import { buildVulnerabilityNoteBody } from './infrastructure/obsidian/VulnerabilityNote';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
-import { VulnDashSettingTab } from './VulnDashSettingTab';
+import { VulnDashSettingTab } from './infrastructure/obsidian/VulnDashSettingsTab';
 import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from './infrastructure/utils/crypto';
+import { logger } from './infrastructure/utils/logger';
 
 const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
   id: true,
@@ -72,6 +73,12 @@ interface SbomComponent {
 
 interface SbomDocument {
   components?: SbomComponent[];
+}
+
+interface FeedAuthHealth {
+  status: 'unknown' | 'valid' | 'auth_failed' | 'error';
+  checkedAt?: string;
+  message?: string;
 }
 
 const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
@@ -137,7 +144,7 @@ export default class VulnDashPlugin extends Plugin {
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private previousVisibleIds = new Set<string>();
-  private readonly productNameNormalizer = new ProductNameNormalizer();
+  private authHealthByFeedId: Record<string, FeedAuthHealth> = {};
 
   public override async onload(): Promise<void> {
     await this.loadSettings();
@@ -162,6 +169,14 @@ export default class VulnDashPlugin extends Plugin {
       name: 'Open vulnerability dashboard',
       callback: () => {
         void this.activateView();
+      }
+    });
+
+    this.addCommand({
+      id: 'vulndash-validate-feed-connections',
+      name: 'Validate feed connections',
+      callback: () => {
+        void this.validateFeedConnections();
       }
     });
 
@@ -190,8 +205,9 @@ export default class VulnDashPlugin extends Plugin {
       const outcome = await orchestrator.pollOnce();
       const syncSummaries = summarizeSyncResults(outcome.results);
       for (const summary of syncSummaries) {
-        console.info('[vulndash.sync.feed_summary]', summary);
+        logger.info('[vulndash.sync.feed_summary]', summary);
       }
+      this.updateAuthHealth(outcome.results);
       const failureNotice = buildFailureNoticeMessage(outcome.results);
       if (failureNotice) {
         new Notice(failureNotice);
@@ -201,13 +217,14 @@ export default class VulnDashPlugin extends Plugin {
       await this.saveSettings();
       this.lastFetchAt = Date.now();
       await this.processData(outcome.vulnerabilities);
-    } catch {
+    } catch (error: unknown) {
+      logger.warn('[vulndash.refresh.failure]', error instanceof Error ? { name: error.name, message: error.message } : { message: 'Unknown refresh error' });
       new Notice('VulnDash refresh failed. Check your network or API tokens.');
     }
   }
 
   public async updateSettings(next: VulnDashSettings): Promise<void> {
-    this.settings = next;
+    this.settings = await this.encryptSettingsSecrets(next);
     await this.saveSettings();
     this.restartPolling();
     this.updateViewSettings();
@@ -257,9 +274,80 @@ export default class VulnDashPlugin extends Plugin {
   private async processData(vulnerabilities: Vulnerability[]): Promise<void> {
     const filtered = this.alertEngine.filter(vulnerabilities, this.settings);
     const diagnostics = buildVisibilityDiagnostics(vulnerabilities, filtered);
-    console.info('[vulndash.filter.visibility]', diagnostics);
+    logger.info('[vulndash.filter.visibility]', diagnostics);
     this.updateView(filtered);
     await this.notifyOnNewItems(filtered);
+  }
+
+  private async validateFeedConnections(): Promise<void> {
+    const client = new HttpClient();
+    const feeds = buildFeedsFromConfig(
+      this.settings.feeds,
+      client,
+      this.settings.syncControls,
+      async (secret) => this.resolveSecret(secret)
+    );
+    const failures: string[] = [];
+
+    for (const feed of feeds) {
+      const checkedAt = new Date().toISOString();
+      if (!feed.validateConnection) {
+        this.authHealthByFeedId[feed.id] = {
+          status: 'unknown',
+          checkedAt,
+          message: `${feed.name} does not support connection validation.`
+        };
+        continue;
+      }
+
+      const result = await feed.validateConnection(new AbortController().signal);
+      this.authHealthByFeedId[feed.id] = {
+        status: result.ok ? 'valid' : 'error',
+        checkedAt,
+        message: result.message
+      };
+
+      logger.info('[vulndash.feed.validation]', {
+        source: feed.name,
+        feedId: feed.id,
+        ok: result.ok,
+        message: result.message
+      });
+
+      if (!result.ok) {
+        failures.push(feed.name);
+      }
+    }
+
+    if (failures.length > 0) {
+      new Notice(`VulnDash feed validation failed for: ${failures.join(', ')}. Token or API key may be expired, revoked, invalid, or missing required permissions.`);
+      return;
+    }
+
+    new Notice('VulnDash feed connections validated.');
+  }
+
+  private updateAuthHealth(results: Array<{
+    feedId: string;
+    success: boolean;
+    authFailure?: { reason: 'unauthorized' | 'forbidden' };
+  }>): void {
+    const checkedAt = new Date().toISOString();
+    for (const result of results) {
+      this.authHealthByFeedId[result.feedId] = result.authFailure
+        ? {
+          status: 'auth_failed',
+          checkedAt,
+          message: result.authFailure.reason === 'unauthorized'
+            ? 'Authentication failed. Token or API key may be expired, revoked, or invalid.'
+            : 'Authorization failed. Token or API key may be missing required permissions.'
+        }
+        : {
+          status: result.success ? 'valid' : 'error',
+          checkedAt,
+          ...(result.success ? {} : { message: 'Last sync failed.' })
+        };
+    }
   }
 
   private async notifyOnNewItems(vulnerabilities: Vulnerability[]): Promise<void> {
@@ -328,68 +416,8 @@ export default class VulnDashPlugin extends Plugin {
         continue;
       }
 
-      const affectedProducts = this.normalizeAffectedProducts(vulnerability.affectedProducts);
-      const frontmatter = [
-        '---',
-        `id: ${this.asYamlString(vulnerability.id)}`,
-        `severity: ${this.asYamlString(vulnerability.severity)}`,
-        `source: ${this.asYamlString(vulnerability.source)}`,
-        `cvss: ${vulnerability.cvssScore.toFixed(1)}`,
-        `published: ${this.asYamlString(vulnerability.publishedAt)}`,
-        'affected_products:',
-        ...affectedProducts.map((product) => `  - ${this.asYamlString(product)}`),
-        '---',
-        ''
-      ];
-      const affectedStackSection = affectedProducts.length > 0
-        ? affectedProducts.map((product) => `- ${this.toWikiLink(product)}`)
-        : ['- None listed'];
-
-      const body = [
-        ...frontmatter,
-        `# ${vulnerability.id} (${vulnerability.severity})`,
-        '',
-        `- Source: ${vulnerability.source}`,
-        `- CVSS: ${vulnerability.cvssScore.toFixed(1)}`,
-        `- Published: ${vulnerability.publishedAt}`,
-        '',
-        '## Affected Stack',
-        ...affectedStackSection,
-        '',
-        vulnerability.summary,
-        '',
-        '## References',
-        ...vulnerability.references.map((reference) => `- ${reference}`)
-      ].join('\n');
-
-      await this.app.vault.create(notePath, body);
+      await this.app.vault.create(notePath, buildVulnerabilityNoteBody(vulnerability));
     }
-  }
-
-  private normalizeAffectedProducts(products: string[]): string[] {
-    const seen = new Set<string>();
-    const normalized: string[] = [];
-    for (const product of products) {
-      const cleanName = this.productNameNormalizer.normalize(product);
-      if (!cleanName) {
-        continue;
-      }
-      const dedupKey = cleanName.toLowerCase();
-      if (seen.has(dedupKey)) {
-        continue;
-      }
-      seen.add(dedupKey);
-      normalized.push(cleanName);
-    }
-    return normalized;
-  }
-
-  private asYamlString(value: string): string {
-    return `'${value.replace(/'/g, "''")}'`;
-  }
-
-  private toWikiLink(value: string): string {
-    return `[[${value.replace(/[\]|]/g, '')}]]`;
   }
 
   private async ensureFolder(folderPath: string): Promise<void> {
@@ -447,7 +475,12 @@ export default class VulnDashPlugin extends Plugin {
 
   private createOrchestrator(): PollingOrchestrator {
     const client = new HttpClient();
-    const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls);
+    const feeds = buildFeedsFromConfig(
+      this.settings.feeds,
+      client,
+      this.settings.syncControls,
+      async (secret) => this.resolveSecret(secret)
+    );
 
     return new PollingOrchestrator(feeds, this.settings.syncControls, {
       cache: this.cachedVulnerabilities,
@@ -511,52 +544,32 @@ export default class VulnDashPlugin extends Plugin {
   private async loadSettings(): Promise<void> {
     const loaded = await this.loadData();
     const loadedSettings = (loaded as Partial<VulnDashSettings> | null) ?? null;
-    const loadedNvd = loadedSettings?.nvdApiKey ?? '';
-    const loadedGithub = loadedSettings?.githubToken ?? '';
-    const nvdSecret = await this.loadSecret(loadedNvd);
-    const githubSecret = await this.loadSecret(loadedGithub);
-
-    const loadedFeeds = await Promise.all((loadedSettings?.feeds ?? []).map(async (feed) => {
-      if (feed.type === 'nvd') {
-        const apiKeySecret = await this.loadSecret(feed.apiKey ?? '');
-        return {
-          ...feed,
-          apiKey: apiKeySecret.value
-        };
-      }
-
-      const tokenSecret = await this.loadSecret(feed.token ?? '');
-      return {
-        ...feed,
-        token: tokenSecret.value
-      };
-    }));
 
     const migrated = migrateLegacySettings({
-      ...(loadedSettings ?? {}),
-      nvdApiKey: nvdSecret.value,
-      githubToken: githubSecret.value,
-      feeds: loadedFeeds
+      ...(loadedSettings ?? {})
     });
-    this.settings = migrated;
+    this.settings = await this.encryptSettingsSecrets(migrated);
 
-    if (nvdSecret.decryptionFailed || githubSecret.decryptionFailed) {
-      new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
-    }
-
-    if (nvdSecret.needsMigration || githubSecret.needsMigration || (loadedSettings?.settingsVersion ?? 0) < 2) {
+    if (this.hasPlaintextSecrets(migrated) || (loadedSettings?.settingsVersion ?? 0) < 2) {
       await this.saveSettings();
     }
   }
 
   private async saveSettings(): Promise<void> {
-    const encryptedNvd = await this.serializeSecret(this.settings.nvdApiKey);
-    const encryptedGithub = await this.serializeSecret(this.settings.githubToken);
-    const feeds = await Promise.all(this.settings.feeds.map(async (feed) => {
+    const dataToSave = await this.encryptSettingsSecrets(this.settings);
+    this.settings = dataToSave;
+    await this.saveData(dataToSave);
+  }
+
+  private async encryptSettingsSecrets(settings: VulnDashSettings): Promise<VulnDashSettings> {
+    const encryptedNvd = await this.serializeSecret(settings.nvdApiKey);
+    const encryptedGithub = await this.serializeSecret(settings.githubToken);
+    const feeds = await Promise.all(settings.feeds.map(async (feed) => {
       if (feed.type === 'nvd') {
         return {
           ...feed,
-          apiKey: await this.serializeSecret(feed.apiKey ?? '')
+          apiKey: await this.serializeSecret(feed.apiKey ?? ''),
+          ...(feed.token ? { token: await this.serializeSecret(feed.token) } : {})
         };
       }
       if (feed.token) {
@@ -568,19 +581,20 @@ export default class VulnDashPlugin extends Plugin {
       return { ...feed };
     }));
 
-    const dataToSave: VulnDashSettings = {
-       ...this.settings,
+    return {
+       ...settings,
        nvdApiKey: encryptedNvd,
        githubToken: encryptedGithub,
        feeds
     };
-
-    await this.saveData(dataToSave);
   }
 
   private async serializeSecret(secret: string): Promise<string> {
     if (!secret) {
       return '';
+    }
+    if (secret.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+      return secret;
     }
     const encrypted = await encryptSecret(secret);
     if (!encrypted) {
@@ -605,5 +619,29 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     return { value: '', needsMigration: false, decryptionFailed: true };
+  }
+
+  private async resolveSecret(secret: string): Promise<string> {
+    if (!secret || !secret.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+      return secret;
+    }
+
+    const decrypted = await this.loadSecret(secret);
+    if (decrypted.decryptionFailed) {
+      new Notice('VulnDash could not decrypt a stored API key or token. Please re-enter it.');
+    }
+
+    // JavaScript strings cannot be reliably zeroized in Electron/V8. Keep this value scoped to
+    // the immediate request path and never pass it to logs, notices, or long-lived feed fields.
+    return decrypted.value;
+  }
+
+  private hasPlaintextSecrets(settings: VulnDashSettings): boolean {
+    const hasPlaintext = (secret: string | undefined): boolean =>
+      Boolean(secret && !secret.startsWith(ENCRYPTED_SECRET_PREFIX));
+
+    return hasPlaintext(settings.nvdApiKey)
+      || hasPlaintext(settings.githubToken)
+      || settings.feeds.some((feed) => hasPlaintext(feed.token) || (feed.type === 'nvd' && hasPlaintext(feed.apiKey)));
   }
 }

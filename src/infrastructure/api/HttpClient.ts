@@ -1,12 +1,14 @@
 import { requestUrl } from 'obsidian';
 import type { HttpResponse, IHttpClient } from '../../application/ports/IHttpClient';
 import {
+  AuthFailureHttpError,
   ClientHttpError,
   RateLimitHttpError,
   RetryableNetworkError,
   ServerHttpError,
   TimeoutHttpError
 } from '../../application/ports/HttpRequestError';
+import { redactSensitiveString } from '../utils/logger';
 
 const parseRetryAfterMs = (retryAfterHeader: string | undefined): number | undefined => {
   if (!retryAfterHeader) return undefined;
@@ -23,8 +25,9 @@ const parseRetryAfterMs = (retryAfterHeader: string | undefined): number | undef
 
 export class HttpClient implements IHttpClient {
   public async getJson<T>(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<HttpResponse<T>> {
+    const safeUrl = redactSensitiveString(url);
     if (signal.aborted) {
-      throw new RetryableNetworkError('Request aborted before execution', { url });
+      throw new RetryableNetworkError('Request aborted before execution', { url: safeUrl });
     }
 
     try {
@@ -47,19 +50,29 @@ export class HttpClient implements IHttpClient {
       const metadata = {
         status: response.status,
         headers: normalizedHeaders,
-        url,
+        url: safeUrl,
         ...(retryAfterMs !== undefined ? { retryAfterMs } : {})
       };
+      if (response.status === 401) {
+        throw new AuthFailureHttpError(`Authentication failed while requesting ${safeUrl}`, metadata, 'unauthorized');
+      }
+      if (response.status === 403 && normalizedHeaders['x-ratelimit-remaining'] === '0') {
+        throw new RateLimitHttpError(`Rate limited while requesting ${safeUrl}`, metadata);
+      }
+      if (response.status === 403) {
+        throw new AuthFailureHttpError(`Authorization failed while requesting ${safeUrl}`, metadata, 'forbidden');
+      }
       if (response.status === 429) {
-        throw new RateLimitHttpError(`Rate limited while requesting ${url}`, metadata);
+        throw new RateLimitHttpError(`Rate limited while requesting ${safeUrl}`, metadata);
       }
       if (response.status >= 500) {
-        throw new ServerHttpError(`HTTP ${response.status} for ${url}`, metadata);
+        throw new ServerHttpError(`HTTP ${response.status} for ${safeUrl}`, metadata);
       }
-      throw new ClientHttpError(`HTTP ${response.status} for ${url}`, metadata);
+      throw new ClientHttpError(`HTTP ${response.status} for ${safeUrl}`, metadata);
     } catch (error: unknown) {
       if (
-        error instanceof ClientHttpError
+        error instanceof AuthFailureHttpError
+        || error instanceof ClientHttpError
         || error instanceof ServerHttpError
         || error instanceof RateLimitHttpError
       ) {
@@ -68,10 +81,10 @@ export class HttpClient implements IHttpClient {
 
       const message = error instanceof Error ? error.message : 'Unknown network error';
       if (message.toLowerCase().includes('timeout')) {
-        throw new TimeoutHttpError(`Timeout requesting ${url}`, { url });
+        throw new TimeoutHttpError(`Timeout requesting ${safeUrl}`, { url: safeUrl });
       }
 
-      throw new RetryableNetworkError(`Network request failed for ${url}`, { url });
+      throw new RetryableNetworkError(`Network request failed for ${safeUrl}`, { url: safeUrl });
     }
   }
 }

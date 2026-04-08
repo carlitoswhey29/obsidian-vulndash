@@ -7,6 +7,8 @@
  * Note: This encryption is meant to protect against casual snooping and is not a substitute for
  * enterprise-grade security solutions. Always follow best practices for handling sensitive data.
  */
+import { logger } from './logger';
+
 const LOCAL_STORAGE_KEY = 'vulndash-encryption-key';
 export const ENCRYPTED_SECRET_PREFIX = 'enc:';
 
@@ -91,7 +93,7 @@ export async function decryptSecret(cipherTextB64: string): Promise<DecryptSecre
     );
     return { status: 'success', value: new TextDecoder().decode(decrypted) };
   } catch {
-    console.warn("VulnDash: Failed to decrypt secret. You may need to re-enter your API keys.");
+    logger.warn('VulnDash: Failed to decrypt secret. You may need to re-enter your API keys.');
     return {
       status: 'failed',
       value: '',
