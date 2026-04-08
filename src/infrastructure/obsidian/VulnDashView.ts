@@ -28,7 +28,6 @@ export class VulnDashView extends ItemView {
   private tableContainer: HTMLDivElement | null = null;
   private filterDebounceHandle: number | null = null;
   private pollingButton: HTMLButtonElement | null = null;
-  private renderedSummaryIds = new Set<string>();
   private readonly onRefresh: () => Promise<void>;
   private readonly onTogglePolling: () => Promise<void>;
   private readonly isPollingEnabled: () => boolean;
@@ -127,9 +126,6 @@ export class VulnDashView extends ItemView {
     }
     this.expandedItems = new Set(
       Array.from(this.expandedItems).filter((id) => current.has(id))
-    );
-    this.renderedSummaryIds = new Set(
-      Array.from(this.renderedSummaryIds).filter((id) => current.has(id))
     );
     this.vulnerabilities = vulnerabilities;
     this.render();
@@ -276,11 +272,10 @@ export class VulnDashView extends ItemView {
   }
 
   private async renderSummaryIfNeeded(vulnerability: Vulnerability, container: HTMLDivElement): Promise<void> {
-    if (this.renderedSummaryIds.has(vulnerability.id)) {
+    if (container.childElementCount > 0) {
       return;
     }
     await MarkdownRenderer.render(this.app, vulnerability.summary, container, '', this);
-    this.renderedSummaryIds.add(vulnerability.id);
   }
 
   private getSorted(): Vulnerability[] {
