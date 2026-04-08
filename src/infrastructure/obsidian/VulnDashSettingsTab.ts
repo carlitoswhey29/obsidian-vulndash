@@ -1,6 +1,6 @@
 import { PluginSettingTab, App, Setting } from 'obsidian';
-import type { VulnDashSettings, ColumnVisibility } from './application/services/types';
-import VulnDashPlugin, { DEFAULT_SETTINGS } from './plugin';
+import type { VulnDashSettings, ColumnVisibility } from '../../application/services/types';
+import VulnDashPlugin, { DEFAULT_SETTINGS } from '../../plugin';
 
 const getNvdFeed = (settings: VulnDashSettings) =>
   settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'nvd' }> =>

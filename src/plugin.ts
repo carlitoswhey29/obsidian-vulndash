@@ -13,7 +13,7 @@ import type { Vulnerability } from './domain/entities/Vulnerability';
 import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
 import { HttpClient } from './infrastructure/api/HttpClient';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
-import { VulnDashSettingTab } from './VulnDashSettingTab';
+import { VulnDashSettingTab } from './infrastructure/obsidian/VulnDashSettingsTab';
 import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from './infrastructure/utils/crypto';
 
 const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
