@@ -27,13 +27,24 @@
 }
 
 .vulndash-critical {
-  color: var(--text-error);
+  color: var(--text-error, #d92d20);
   font-weight: 700;
 }
 
 .vulndash-high {
-  color: var(--text-warning);
+  color: var(--text-warning, #b54708);
   font-weight: 600;
+}
+
+.vulndash-medium {
+  color: var(--text-accent, #2563eb);
+  font-weight: 600;
+}
+
+.vulndash-low,
+.vulndash-none {
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .vulndash-header {
