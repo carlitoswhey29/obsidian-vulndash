@@ -112,7 +112,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
 
   protected buildInitialUrl(since: string | undefined): string {
     const params = new URLSearchParams({ per_page: '100' });
-    if (since) params.set('since', since);
+    if (since) params.set('updated', since);
     return `https://api.github.com/advisories?${params.toString()}`;
   }
 

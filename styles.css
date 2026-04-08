@@ -115,7 +115,7 @@
   display: block;
 }
 
-.vulndash-table /* Column Widths for 9-column layout */
+/* Column Widths for 9-column layout */
 .vulndash-table th:nth-child(1),
 .vulndash-table td:nth-child(1) { width: 15%; } /* ID */
 
