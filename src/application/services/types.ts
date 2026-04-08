@@ -76,6 +76,7 @@ export interface VulnDashSettings {
   enableNvdFeed: boolean;
   enableGithubFeed: boolean;
   autoNoteCreationEnabled: boolean;
+  autoHighNoteCreationEnabled: boolean;
   autoNoteFolder: string;
   sbomPath: string;
   syncControls: SyncControls;

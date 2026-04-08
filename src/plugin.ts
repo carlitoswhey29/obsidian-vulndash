@@ -50,6 +50,7 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
   enableNvdFeed: true,
   enableGithubFeed: true,
   autoNoteCreationEnabled: false,
+  autoHighNoteCreationEnabled: false,
   autoNoteFolder: 'VulnDash Alerts',
   sbomPath: '',
   syncControls: {
@@ -282,8 +283,11 @@ export default class VulnDashPlugin extends Plugin {
       this.sendDesktopAlert(highPriority);
     }
 
-    if (this.settings.autoNoteCreationEnabled) {
-      await this.createCriticalNotes(newItems.filter((vulnerability) => vulnerability.severity === 'CRITICAL'));
+    if (this.settings.autoNoteCreationEnabled || this.settings.autoHighNoteCreationEnabled) {
+      await this.createSeverityNotes(newItems.filter((vulnerability) =>
+        vulnerability.severity === 'CRITICAL'
+        || (this.settings.autoHighNoteCreationEnabled && vulnerability.severity === 'HIGH')
+      ));
     }
   }
 
@@ -312,7 +316,7 @@ export default class VulnDashPlugin extends Plugin {
     }
   }
 
-  private async createCriticalNotes(vulnerabilities: Vulnerability[]): Promise<void> {
+  private async createSeverityNotes(vulnerabilities: Vulnerability[]): Promise<void> {
     if (vulnerabilities.length === 0) {
       return;
     }
@@ -429,12 +433,7 @@ export default class VulnDashPlugin extends Plugin {
     let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
 
     if (!leaf) {
-      const rightLeaf = this.app.workspace.getRightLeaf(false);
-      if (!rightLeaf) {
-        new Notice('Unable to open VulnDash view.');
-        return;
-      }
-      leaf = rightLeaf;
+      leaf = this.app.workspace.getLeaf(true);
       await leaf.setViewState({
         type: VULNDASH_VIEW_TYPE,
         active: true

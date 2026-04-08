@@ -286,8 +286,17 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Auto-note creation for CRITICAL')
+      .setDesc('Creates notes automatically for new CRITICAL vulnerabilities.')
       .addToggle((toggle) => toggle.setValue(settings.autoNoteCreationEnabled).onChange(async (value) => {
         await this.plugin.updateSettings({ ...this.plugin.getSettings(), autoNoteCreationEnabled: value });
+      })
+      );
+
+    new Setting(containerEl)
+      .setName('Auto-note creation for HIGH')
+      .setDesc('Creates notes automatically for new HIGH vulnerabilities.')
+      .addToggle((toggle) => toggle.setValue(settings.autoHighNoteCreationEnabled).onChange(async (value) => {
+        await this.plugin.updateSettings({ ...this.plugin.getSettings(), autoHighNoteCreationEnabled: value });
       })
       );
 

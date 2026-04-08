@@ -155,6 +155,43 @@ test('normalizes NVD CWE vendor product and version metadata', async () => {
   assert.ok(vulnerability?.references.includes('https://vendor.example.com/CVE-2026-3000'));
 });
 
+test('uses the NVD English description as a descriptive title', async () => {
+  const response: HttpResponse<unknown> = {
+    status: 200,
+    headers: {},
+    data: {
+      startIndex: 0,
+      resultsPerPage: 1,
+      totalResults: 1,
+      vulnerabilities: [{
+        cve: {
+          id: 'CVE-2026-4000',
+          published: '2026-02-01T00:00:00.000Z',
+          lastModified: '2026-02-01T01:00:00.000Z',
+          descriptions: [{
+            lang: 'en',
+            value: 'Remote attackers can trigger command injection via crafted input in the management API. Additional detail follows here.'
+          }]
+        }
+      }]
+    }
+  };
+
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return response as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.equal(
+    result.vulnerabilities[0]?.title,
+    'Remote attackers can trigger command injection via crafted input in the management API.'
+  );
+});
+
 test('passes apiKey in the NVD query string instead of request headers', async () => {
   let seenUrl = '';
   let seenHeaders: Record<string, string> | undefined;
