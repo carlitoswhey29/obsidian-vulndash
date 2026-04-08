@@ -96,6 +96,65 @@ test('normalizes CPE affected products into readable names', async () => {
   assert.deepEqual(result.vulnerabilities[0]?.affectedProducts, ['Apache Tomcat 10.1.31', 'Nodejs Node.js']);
 });
 
+test('normalizes NVD CWE vendor product and version metadata', async () => {
+  const response: HttpResponse<unknown> = {
+    status: 200,
+    headers: {},
+    data: {
+      startIndex: 0,
+      resultsPerPage: 1,
+      totalResults: 1,
+      vulnerabilities: [{
+        cve: {
+          id: 'CVE-2026-3000',
+          published: '2026-02-01T00:00:00.000Z',
+          lastModified: '2026-02-01T01:00:00.000Z',
+          weaknesses: [{
+            description: [
+              { lang: 'en', value: 'CWE-79' },
+              { lang: 'en', value: 'NVD-CWE-noinfo' }
+            ]
+          }],
+          references: [{ url: 'https://vendor.example.com/CVE-2026-3000' }],
+          metrics: {
+            cvssMetricV31: [{ cvssData: { baseScore: 9.8 } }]
+          },
+          configurations: [{
+            nodes: [{
+              cpeMatch: [{
+                vulnerable: true,
+                criteria: 'cpe:2.3:a:microsoft:edge:*:*:*:*:*:*:*:*',
+                versionStartIncluding: '1.0.0',
+                versionEndExcluding: '2.0.0'
+              }]
+            }]
+          }]
+        }
+      }]
+    }
+  };
+
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return response as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+  const vulnerability = result.vulnerabilities[0];
+
+  assert.equal(vulnerability?.metadata?.cveId, 'CVE-2026-3000');
+  assert.deepEqual(vulnerability?.metadata?.cwes, ['CWE-79']);
+  assert.deepEqual(vulnerability?.metadata?.vendors, ['Microsoft']);
+  assert.deepEqual(vulnerability?.metadata?.packages, ['Edge']);
+  assert.deepEqual(vulnerability?.metadata?.vulnerableVersionRanges, ['Microsoft Edge: >= 1.0.0, < 2.0.0']);
+  assert.equal(vulnerability?.metadata?.affectedPackages?.[0]?.vendor, 'Microsoft');
+  assert.equal(vulnerability?.metadata?.affectedPackages?.[0]?.name, 'Edge');
+  assert.equal(vulnerability?.metadata?.sourceUrls?.html, 'https://nvd.nist.gov/vuln/detail/CVE-2026-3000');
+  assert.ok(vulnerability?.references.includes('https://vendor.example.com/CVE-2026-3000'));
+});
+
 test('passes apiKey in the NVD query string instead of request headers', async () => {
   let seenUrl = '';
   let seenHeaders: Record<string, string> | undefined;

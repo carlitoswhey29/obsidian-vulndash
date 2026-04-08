@@ -10,8 +10,8 @@ import { PollingOrchestrator } from './application/services/PollingOrchestrator'
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from './application/services/SyncOutcomeDiagnostics';
 import type { ColumnVisibility, FeedConfig, VulnDashSettings } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
-import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
 import { HttpClient } from './infrastructure/api/HttpClient';
+import { buildVulnerabilityNoteBody } from './infrastructure/obsidian/VulnerabilityNote';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
 import { VulnDashSettingTab } from './infrastructure/obsidian/VulnDashSettingsTab';
 import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from './infrastructure/utils/crypto';
@@ -137,7 +137,6 @@ export default class VulnDashPlugin extends Plugin {
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private previousVisibleIds = new Set<string>();
-  private readonly productNameNormalizer = new ProductNameNormalizer();
 
   public override async onload(): Promise<void> {
     await this.loadSettings();
@@ -328,68 +327,8 @@ export default class VulnDashPlugin extends Plugin {
         continue;
       }
 
-      const affectedProducts = this.normalizeAffectedProducts(vulnerability.affectedProducts);
-      const frontmatter = [
-        '---',
-        `id: ${this.asYamlString(vulnerability.id)}`,
-        `severity: ${this.asYamlString(vulnerability.severity)}`,
-        `source: ${this.asYamlString(vulnerability.source)}`,
-        `cvss: ${vulnerability.cvssScore.toFixed(1)}`,
-        `published: ${this.asYamlString(vulnerability.publishedAt)}`,
-        'affected_products:',
-        ...affectedProducts.map((product) => `  - ${this.asYamlString(product)}`),
-        '---',
-        ''
-      ];
-      const affectedStackSection = affectedProducts.length > 0
-        ? affectedProducts.map((product) => `- ${this.toWikiLink(product)}`)
-        : ['- None listed'];
-
-      const body = [
-        ...frontmatter,
-        `# ${vulnerability.id} (${vulnerability.severity})`,
-        '',
-        `- Source: ${vulnerability.source}`,
-        `- CVSS: ${vulnerability.cvssScore.toFixed(1)}`,
-        `- Published: ${vulnerability.publishedAt}`,
-        '',
-        '## Affected Stack',
-        ...affectedStackSection,
-        '',
-        vulnerability.summary,
-        '',
-        '## References',
-        ...vulnerability.references.map((reference) => `- ${reference}`)
-      ].join('\n');
-
-      await this.app.vault.create(notePath, body);
+      await this.app.vault.create(notePath, buildVulnerabilityNoteBody(vulnerability));
     }
-  }
-
-  private normalizeAffectedProducts(products: string[]): string[] {
-    const seen = new Set<string>();
-    const normalized: string[] = [];
-    for (const product of products) {
-      const cleanName = this.productNameNormalizer.normalize(product);
-      if (!cleanName) {
-        continue;
-      }
-      const dedupKey = cleanName.toLowerCase();
-      if (seen.has(dedupKey)) {
-        continue;
-      }
-      seen.add(dedupKey);
-      normalized.push(cleanName);
-    }
-    return normalized;
-  }
-
-  private asYamlString(value: string): string {
-    return `'${value.replace(/'/g, "''")}'`;
-  }
-
-  private toWikiLink(value: string): string {
-    return `[[${value.replace(/[\]|]/g, '')}]]`;
   }
 
   private async ensureFolder(folderPath: string): Promise<void> {

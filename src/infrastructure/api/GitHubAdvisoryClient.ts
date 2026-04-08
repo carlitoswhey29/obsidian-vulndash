@@ -1,7 +1,12 @@
 import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
 import { ClientHttpError } from '../../application/ports/HttpRequestError';
-import type { Vulnerability } from '../../domain/entities/Vulnerability';
+import type {
+  Vulnerability,
+  VulnerabilityAffectedPackage,
+  VulnerabilityMetadata,
+  VulnerabilitySourceUrls
+} from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 
@@ -12,6 +17,8 @@ export interface FeedSyncControls {
 
 export type GitHubAdvisoryItem = {
   ghsa_id?: string;
+  cve_id?: string | null;
+  url?: string;
   summary?: string;
   description?: string;
   published_at?: string;
@@ -19,7 +26,18 @@ export type GitHubAdvisoryItem = {
   severity?: 'low' | 'moderate' | 'high' | 'critical';
   cvss?: { score?: number };
   html_url?: string;
-  vulnerabilities?: Array<{ package?: { name?: string } }>;
+  repository_advisory_url?: string;
+  source_code_location?: string;
+  identifiers?: Array<{ type?: string; value?: string }>;
+  references?: string[];
+  cwes?: Array<{ cwe_id?: string; name?: string }>;
+  vulnerabilities?: Array<{
+    package?: { ecosystem?: string; name?: string };
+    vulnerable_version_range?: string;
+    first_patched_version?: { identifier?: string } | null;
+    vulnerable_functions?: string[];
+    source_code_location?: string;
+  }>;
 };
 
 type GitHubSecurityResponse = GitHubAdvisoryItem[] | { items?: GitHubAdvisoryItem[] };
@@ -34,6 +52,35 @@ const severityToScore = (severity: string | undefined): number => {
     case 'low': return 2.5;
     default: return 0;
   }
+};
+
+const uniqueNonEmpty = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+
+  return result;
+};
+
+const findIdentifier = (identifiers: string[], prefix: string): string | undefined =>
+  identifiers.find((identifier) => identifier.toLowerCase().startsWith(prefix.toLowerCase()));
+
+const deriveVendor = (packageName: string, sourceCodeLocation: string): string => {
+  const scopeMatch = packageName.match(/^@([^/]+)\//);
+  if (scopeMatch?.[1]) {
+    return scopeMatch[1];
+  }
+
+  const githubMatch = sourceCodeLocation.match(/^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)/i);
+  return githubMatch?.[1] ?? '';
 };
 
 export const extractNextLink = (linkHeader: string | undefined): string | undefined => {
@@ -190,9 +237,85 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
     const summary = advisory.description ?? advisory.summary ?? 'No summary provided';
     const publishedAt = advisory.published_at ?? new Date(0).toISOString();
     const updatedAt = advisory.updated_at ?? publishedAt;
+    const identifiers = uniqueNonEmpty((advisory.identifiers ?? [])
+      .map((identifier) => sanitizeText(identifier.value ?? '')));
+    const ghsaId = sanitizeText(advisory.ghsa_id ?? findIdentifier(identifiers, 'GHSA-') ?? '');
+    const cveId = sanitizeText(advisory.cve_id ?? findIdentifier(identifiers, 'CVE-') ?? '');
+    const cwes = uniqueNonEmpty((advisory.cwes ?? [])
+      .map((cwe) => sanitizeText(cwe.cwe_id ?? ''))
+      .filter((cwe) => /^CWE-\d+$/i.test(cwe)));
+    const affectedPackages = (advisory.vulnerabilities ?? [])
+      .map((vulnerability): VulnerabilityAffectedPackage | null => {
+        const packageName = sanitizeText(vulnerability.package?.name ?? '');
+        if (!packageName) {
+          return null;
+        }
+
+        const ecosystem = sanitizeText(vulnerability.package?.ecosystem ?? '');
+        const sourceCodeLocation = sanitizeUrl(vulnerability.source_code_location ?? advisory.source_code_location ?? '');
+        const vulnerableVersionRange = sanitizeText(vulnerability.vulnerable_version_range ?? '');
+        const firstPatchedVersion = sanitizeText(vulnerability.first_patched_version?.identifier ?? '');
+        const vulnerableFunctions = uniqueNonEmpty((vulnerability.vulnerable_functions ?? [])
+          .map((vulnerableFunction) => sanitizeText(vulnerableFunction)));
+        const vendor = sanitizeText(deriveVendor(packageName, sourceCodeLocation));
+
+        return {
+          name: packageName,
+          ...(ecosystem ? { ecosystem } : {}),
+          ...(vendor ? { vendor } : {}),
+          ...(sourceCodeLocation ? { sourceCodeLocation } : {}),
+          ...(vulnerableVersionRange ? { vulnerableVersionRange } : {}),
+          ...(firstPatchedVersion ? { firstPatchedVersion } : {}),
+          ...(vulnerableFunctions.length > 0 ? { vulnerableFunctions } : {})
+        };
+      })
+      .filter((vulnerability): vulnerability is VulnerabilityAffectedPackage => vulnerability !== null);
+    const packages = uniqueNonEmpty(affectedPackages.map((vulnerability) => vulnerability.name));
+    const vendors = uniqueNonEmpty(affectedPackages.map((vulnerability) => vulnerability.vendor ?? ''));
+    const vulnerableVersionRanges = uniqueNonEmpty(affectedPackages
+      .map((vulnerability) => vulnerability.vulnerableVersionRange
+        ? `${vulnerability.name}: ${vulnerability.vulnerableVersionRange}`
+        : ''));
+    const firstPatchedVersions = uniqueNonEmpty(affectedPackages
+      .map((vulnerability) => vulnerability.firstPatchedVersion
+        ? `${vulnerability.name}: ${vulnerability.firstPatchedVersion}`
+        : ''));
+    const vulnerableFunctions = uniqueNonEmpty(affectedPackages
+      .flatMap((vulnerability) => vulnerability.vulnerableFunctions ?? []));
+    const sourceUrls: VulnerabilitySourceUrls = {};
+    const apiUrl = sanitizeUrl(advisory.url ?? '');
+    const htmlUrl = sanitizeUrl(advisory.html_url ?? '');
+    const repositoryAdvisoryUrl = sanitizeUrl(advisory.repository_advisory_url ?? '');
+    const sourceCodeUrl = sanitizeUrl(advisory.source_code_location ?? '');
+
+    if (apiUrl) sourceUrls.api = apiUrl;
+    if (htmlUrl) sourceUrls.html = htmlUrl;
+    if (repositoryAdvisoryUrl) sourceUrls.repositoryAdvisory = repositoryAdvisoryUrl;
+    if (sourceCodeUrl) sourceUrls.sourceCode = sourceCodeUrl;
+
+    const metadata: VulnerabilityMetadata = {};
+    if (cveId) metadata.cveId = cveId;
+    if (ghsaId) metadata.ghsaId = ghsaId;
+    if (identifiers.length > 0) metadata.identifiers = identifiers;
+    const aliases = uniqueNonEmpty(identifiers.filter((identifier) => identifier !== ghsaId && identifier !== cveId));
+    if (aliases.length > 0) metadata.aliases = aliases;
+    if (cwes.length > 0) metadata.cwes = cwes;
+    if (vendors.length > 0) metadata.vendors = vendors;
+    if (packages.length > 0) metadata.packages = packages;
+    if (affectedPackages.length > 0) metadata.affectedPackages = affectedPackages;
+    if (vulnerableVersionRanges.length > 0) metadata.vulnerableVersionRanges = vulnerableVersionRanges;
+    if (firstPatchedVersions.length > 0) metadata.firstPatchedVersions = firstPatchedVersions;
+    if (vulnerableFunctions.length > 0) metadata.vulnerableFunctions = vulnerableFunctions;
+    if (Object.keys(sourceUrls).length > 0) metadata.sourceUrls = sourceUrls;
+    const references = uniqueNonEmpty([
+      htmlUrl,
+      repositoryAdvisoryUrl,
+      sourceCodeUrl,
+      ...(advisory.references ?? []).map((reference) => sanitizeUrl(reference))
+    ]);
 
     return {
-      id: sanitizeText(advisory.ghsa_id ?? 'unknown'),
+      id: ghsaId || cveId || 'unknown',
       source: sourceLabel,
       title: sanitizeText(advisory.summary ?? advisory.ghsa_id ?? 'GitHub Advisory'),
       summary: sanitizeMarkdown(summary),
@@ -200,10 +323,9 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       updatedAt,
       cvssScore: score,
       severity: classifySeverity(score),
-      references: [sanitizeUrl(advisory.html_url ?? '')].filter(Boolean),
-      affectedProducts: (advisory.vulnerabilities ?? [])
-        .map((v) => sanitizeText(v.package?.name ?? ''))
-        .filter(Boolean)
+      references,
+      affectedProducts: packages,
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {})
     };
   }
 }

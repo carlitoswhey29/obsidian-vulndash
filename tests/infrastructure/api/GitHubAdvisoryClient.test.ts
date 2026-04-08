@@ -52,6 +52,60 @@ test('fetches global GitHub advisories with expected headers and endpoint', asyn
   assert.equal(seen[0]?.headers.Authorization, 'Bearer token-value');
 });
 
+test('normalizes GitHub advisory package and identifier metadata', async () => {
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: [{
+          ghsa_id: 'GHSA-aaaa-bbbb-cccc',
+          cve_id: 'CVE-2026-1234',
+          url: 'https://api.github.com/advisories/GHSA-aaaa-bbbb-cccc',
+          html_url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc',
+          repository_advisory_url: 'https://api.github.com/repos/acme/widget/security-advisories/GHSA-aaaa-bbbb-cccc',
+          summary: 'Sample',
+          description: 'desc',
+          published_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-02T00:00:00.000Z',
+          severity: 'critical',
+          identifiers: [
+            { type: 'GHSA', value: 'GHSA-aaaa-bbbb-cccc' },
+            { type: 'CVE', value: 'CVE-2026-1234' }
+          ],
+          cwes: [{ cwe_id: 'CWE-79', name: 'Cross-site Scripting' }],
+          vulnerabilities: [{
+            package: { ecosystem: 'npm', name: '@acme/widget' },
+            vulnerable_version_range: '< 1.2.3',
+            first_patched_version: { identifier: '1.2.3' },
+            vulnerable_functions: ['parseWidget', 'parseWidget'],
+            source_code_location: 'https://github.com/acme/widget'
+          }],
+          references: ['https://example.com/advisory']
+        }]
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+  const vulnerability = result.vulnerabilities[0];
+
+  assert.equal(vulnerability?.metadata?.ghsaId, 'GHSA-aaaa-bbbb-cccc');
+  assert.equal(vulnerability?.metadata?.cveId, 'CVE-2026-1234');
+  assert.deepEqual(vulnerability?.metadata?.identifiers, ['GHSA-aaaa-bbbb-cccc', 'CVE-2026-1234']);
+  assert.deepEqual(vulnerability?.metadata?.cwes, ['CWE-79']);
+  assert.deepEqual(vulnerability?.metadata?.vendors, ['acme']);
+  assert.deepEqual(vulnerability?.metadata?.packages, ['@acme/widget']);
+  assert.deepEqual(vulnerability?.metadata?.vulnerableVersionRanges, ['@acme/widget: < 1.2.3']);
+  assert.deepEqual(vulnerability?.metadata?.firstPatchedVersions, ['@acme/widget: 1.2.3']);
+  assert.deepEqual(vulnerability?.metadata?.vulnerableFunctions, ['parseWidget']);
+  assert.equal(vulnerability?.metadata?.affectedPackages?.[0]?.ecosystem, 'npm');
+  assert.equal(vulnerability?.metadata?.affectedPackages?.[0]?.sourceCodeLocation, 'https://github.com/acme/widget');
+  assert.ok(vulnerability?.references.includes('https://github.com/advisories/GHSA-aaaa-bbbb-cccc'));
+  assert.ok(vulnerability?.references.includes('https://example.com/advisory'));
+});
+
 test('maps incremental cursor to GitHub updated filter', async () => {
   let seenUrl = '';
   const httpClient: IHttpClient = {
