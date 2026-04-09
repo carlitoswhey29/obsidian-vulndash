@@ -12,7 +12,8 @@ import { SbomFilterMergeService } from './application/services/SbomFilterMergeSe
 import {
   SbomImportService,
   type SbomFileChangeStatus,
-  type SbomLoadResult
+  type SbomLoadResult,
+  type SbomValidationResult
 } from './application/services/SbomImportService';
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from './application/services/SyncOutcomeDiagnostics';
 import type {
@@ -349,6 +350,23 @@ const createEmptySbomConfig = (index: number): ImportedSbomConfig => ({
   path: ''
 });
 
+export const buildPersistedSettingsSnapshot = (
+  settings: VulnDashSettings,
+  secrets: {
+    githubToken: string;
+    nvdApiKey: string;
+  },
+  feeds: FeedConfig[]
+): VulnDashSettings => ({
+  ...settings,
+  sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
+  sbomPath: '',
+  settingsVersion: SETTINGS_VERSION,
+  nvdApiKey: secrets.nvdApiKey,
+  githubToken: secrets.githubToken,
+  feeds
+});
+
 export default class VulnDashPlugin extends Plugin {
   private settings: VulnDashSettings = DEFAULT_SETTINGS;
   private stopPolling: (() => void) | null = null;
@@ -457,9 +475,11 @@ export default class VulnDashPlugin extends Plugin {
     new Notice('Legacy SBOM import has been retired. Configure SBOM entries under the multi-SBOM management flow.');
   }
 
-  public async addSbom(): Promise<void> {
-    const nextSboms = [...this.settings.sboms, createEmptySbomConfig(this.settings.sboms.length)];
+  public async addSbom(): Promise<ImportedSbomConfig> {
+    const createdSbom = createEmptySbomConfig(this.settings.sboms.length);
+    const nextSboms = [...this.settings.sboms, createdSbom];
     await this.applySettings({ ...this.settings, sboms: nextSboms });
+    return createdSbom;
   }
 
   public async removeSbom(sbomId: string): Promise<void> {
@@ -616,6 +636,18 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     return this.getSbomImportService().getFileChangeStatus(sbom);
+  }
+
+  public async getSbomFileStatuses(): Promise<Map<string, SbomFileChangeStatus>> {
+    const entries = await Promise.all(this.settings.sboms.map(async (sbom) => (
+      [sbom.id, await this.getSbomImportService().getFileChangeStatus(sbom)] as const
+    )));
+
+    return new Map(entries);
+  }
+
+  public async validateSbomPath(path: string): Promise<SbomValidationResult> {
+    return this.getSbomImportService().validateSbomPath(path);
   }
 
   public getSbomById(sbomId: string): ImportedSbomConfig | undefined {
@@ -948,15 +980,10 @@ export default class VulnDashPlugin extends Plugin {
       return { ...feed };
     }));
 
-    const dataToSave: VulnDashSettings = {
-      ...this.settings,
-      sbomOverrides: normalizeSbomOverrides(this.settings.sbomOverrides),
-      sbomPath: '',
-      settingsVersion: SETTINGS_VERSION,
-      nvdApiKey: encryptedNvd,
+    const dataToSave = buildPersistedSettingsSnapshot(this.settings, {
       githubToken: encryptedGithub,
-      feeds
-    };
+      nvdApiKey: encryptedNvd
+    }, feeds);
 
     await this.saveData(dataToSave);
   }

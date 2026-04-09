@@ -13,10 +13,12 @@ interface CycloneDxComponent {
 }
 
 interface CycloneDxDocument {
+  bomFormat?: unknown;
   components?: CycloneDxComponent[];
   metadata?: {
     component?: CycloneDxComponent;
   };
+  specVersion?: unknown;
 }
 
 export interface SbomLoadSuccessResult {
@@ -40,6 +42,20 @@ export interface SbomFileChangeStatus {
   error: string | null;
   status: 'changed' | 'error' | 'missing' | 'not-imported' | 'unchanged';
 }
+
+export interface SbomValidationSuccessResult {
+  componentCount: number;
+  normalizedPath: string;
+  success: true;
+}
+
+export interface SbomValidationFailureResult {
+  error: string;
+  normalizedPath: string;
+  success: false;
+}
+
+export type SbomValidationResult = SbomValidationSuccessResult | SbomValidationFailureResult;
 
 export class SbomImportService {
   private readonly nameNormalizer: ProductNameNormalizer;
@@ -162,6 +178,50 @@ export class SbomImportService {
     }
   }
 
+  public async validateSbomPath(path: string): Promise<SbomValidationResult> {
+    const normalizedPath = this.normalizeSbomPath(path);
+    if (!normalizedPath) {
+      return {
+        error: 'Choose a JSON SBOM file from your vault.',
+        normalizedPath,
+        success: false
+      };
+    }
+
+    try {
+      const exists = await this.reader.exists(normalizedPath);
+      if (!exists) {
+        return {
+          error: 'The selected SBOM file could not be found in the vault.',
+          normalizedPath,
+          success: false
+        };
+      }
+
+      const raw = await this.reader.read(normalizedPath);
+      const parsed = this.parseSbom(raw);
+      if (!this.looksLikeCycloneDxDocument(parsed)) {
+        return {
+          error: 'The selected file is valid JSON, but it does not look like a CycloneDX SBOM.',
+          normalizedPath,
+          success: false
+        };
+      }
+
+      return {
+        componentCount: this.extractComponents(parsed).length,
+        normalizedPath,
+        success: true
+      };
+    } catch (error) {
+      return {
+        error: this.getErrorMessage(error),
+        normalizedPath,
+        success: false
+      };
+    }
+  }
+
   private parseSbom(raw: string): CycloneDxDocument {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object') {
@@ -218,6 +278,22 @@ export class SbomImportService {
     }
 
     return flattened;
+  }
+
+  private looksLikeCycloneDxDocument(document: CycloneDxDocument): boolean {
+    if (this.getString(document.bomFormat).toLowerCase() === 'cyclonedx') {
+      return true;
+    }
+
+    if (this.getString(document.specVersion)) {
+      return true;
+    }
+
+    if (Array.isArray(document.components) || document.metadata?.component) {
+      return true;
+    }
+
+    return false;
   }
 
   private async hashContent(content: string): Promise<string> {

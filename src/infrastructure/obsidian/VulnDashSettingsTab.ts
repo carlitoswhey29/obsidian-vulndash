@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import type { ColumnVisibility, VulnDashSettings } from '../../application/services/types';
+import { summarizeSbomWorkspace } from '../../application/services/SbomWorkspaceService';
 import VulnDashPlugin, { DEFAULT_SETTINGS } from '../../plugin';
 import { SbomManagerModal } from './SbomManagerModal';
 
@@ -313,14 +314,16 @@ export class VulnDashSettingTab extends PluginSettingTab {
           });
       });
 
-    new Setting(containerEl)
-      .setName('Manage SBOMs')
-      .setDesc(`${settings.sboms.length} configured SBOM${settings.sboms.length === 1 ? '' : 's'}. Runtime component data is loaded outside settings storage.`)
+    const summarySetting = new Setting(containerEl)
+      .setName('SBOM workspace')
+      .setDesc(this.formatSbomSummaryText(summarizeSbomWorkspace(settings.sboms)))
       .addButton((button) => {
-        button.setButtonText('Manage SBOMs').onClick(() => {
+        button.setCta().setButtonText('Manage SBOMs').onClick(() => {
           new SbomManagerModal(this.plugin, () => this.display()).open();
         });
       });
+
+    void this.refreshSbomSummary(summarySetting);
   }
 
   private renderFeedSettings(containerEl: HTMLElement, settings: VulnDashSettings): void {
@@ -485,5 +488,21 @@ export class VulnDashSettingTab extends PluginSettingTab {
     } finally {
       text.inputEl.classList.remove('vulndash-input-saving');
     }
+  }
+
+  private async refreshSbomSummary(setting: Setting): Promise<void> {
+    const statuses = await this.plugin.getSbomFileStatuses();
+    const summary = summarizeSbomWorkspace(this.plugin.getSettings().sboms, statuses);
+    setting.setDesc(this.formatSbomSummaryText(summary));
+  }
+
+  private formatSbomSummaryText(summary: ReturnType<typeof summarizeSbomWorkspace>): string {
+    return [
+      `${summary.configured} configured`,
+      `${summary.enabled} enabled`,
+      `${summary.withErrors} with errors`,
+      `${summary.changed} changed since last sync`,
+      'Runtime component data stays in memory, not plugin settings.'
+    ].join(' • ');
   }
 }

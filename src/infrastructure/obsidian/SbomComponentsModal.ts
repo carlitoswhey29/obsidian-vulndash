@@ -2,12 +2,25 @@ import { Modal, Notice } from 'obsidian';
 import type { ResolvedSbomComponent } from '../../application/services/types';
 import type VulnDashPlugin from '../../plugin';
 
+interface EditableSbomComponent extends ResolvedSbomComponent {
+  draftEditedName: string;
+}
+
+const toEditableComponent = (component: ResolvedSbomComponent): EditableSbomComponent => ({
+  ...component,
+  draftEditedName: component.editedName ?? ''
+});
+
+const getComponentDisplayName = (component: EditableSbomComponent): string =>
+  component.editedName?.trim() || component.normalizedName;
+
 export class SbomComponentsModal extends Modal {
   private searchQuery = '';
   private renderId = 0;
-  private components: ResolvedSbomComponent[] = [];
+  private components: EditableSbomComponent[] = [];
   private listEl: HTMLDivElement | null = null;
-  private emptyStateEl: HTMLParagraphElement | null = null;
+  private emptyStateEl: HTMLDivElement | null = null;
+  private resultCountEl: HTMLParagraphElement | null = null;
 
   public constructor(
     private readonly plugin: VulnDashPlugin,
@@ -28,10 +41,11 @@ export class SbomComponentsModal extends Modal {
     contentEl.empty();
     this.listEl = null;
     this.emptyStateEl = null;
+    this.resultCountEl = null;
 
     const sbom = this.plugin.getSbomById(this.sbomId);
     if (!sbom) {
-      contentEl.createEl('p', { text: 'SBOM entry was not found.' });
+      this.renderMessageState(contentEl, 'SBOM not found', 'This SBOM entry is no longer available.');
       return;
     }
 
@@ -40,97 +54,121 @@ export class SbomComponentsModal extends Modal {
       return;
     }
 
-    contentEl.createEl('h2', { text: `${sbom.label}: Components` });
+    const header = contentEl.createDiv({ cls: 'vulndash-modal-header' });
+    header.createEl('h2', { text: `${sbom.label}: Components` });
+    header.createEl('p', {
+      cls: 'vulndash-muted-copy',
+      text: 'Review runtime components, adjust the display name used for filtering, and control whether each component participates in computed filters.'
+    });
+
     if (!components) {
-      contentEl.createEl('p', { text: sbom.lastError || 'Unable to load components for this SBOM.' });
+      this.renderMessageState(contentEl, 'Unable to load components', sbom.lastError || 'The SBOM file could not be parsed into components.');
       return;
     }
 
-    this.components = components;
-    contentEl.createEl('p', {
-      text: `${components.length} runtime component${components.length === 1 ? '' : 's'}. Changes here persist as overrides only.`
-    });
+    this.components = components.map(toEditableComponent);
 
-    const searchInput = contentEl.createEl('input', {
+    const toolbar = contentEl.createDiv({ cls: 'vulndash-sbom-component-toolbar' });
+    const searchInput = toolbar.createEl('input', {
       attr: {
-        placeholder: 'Search by original or effective name',
+        placeholder: 'Search by original, normalized, or display name',
         type: 'search'
       }
     });
     searchInput.value = this.searchQuery;
-    searchInput.addEventListener('input', (event) => {
-      this.searchQuery = (event.target as HTMLInputElement).value.trim().toLowerCase();
+    searchInput.addEventListener('input', () => {
+      this.searchQuery = searchInput.value;
       this.renderComponentList();
     });
 
-    this.emptyStateEl = contentEl.createEl('p');
+    this.resultCountEl = contentEl.createEl('p', { cls: 'vulndash-muted-copy' });
+    this.emptyStateEl = contentEl.createDiv({ cls: 'vulndash-empty-state is-compact' });
     this.listEl = contentEl.createDiv({ cls: 'vulndash-sbom-component-list' });
     this.renderComponentList();
   }
 
   private renderComponentList(): void {
-    if (!this.listEl || !this.emptyStateEl) {
+    if (!this.listEl || !this.emptyStateEl || !this.resultCountEl) {
       return;
     }
 
     this.listEl.empty();
     const filteredComponents = this.getFilteredComponents(this.components);
+    this.resultCountEl.setText(`${filteredComponents.length} of ${this.components.length} component${this.components.length === 1 ? '' : 's'} shown.`);
+
     if (filteredComponents.length === 0) {
-      this.emptyStateEl.setText(this.components.length === 0
-        ? 'This SBOM has no components.'
-        : 'No components match the current search.');
+      this.emptyStateEl.empty();
+      this.emptyStateEl.createEl('h3', { text: this.components.length === 0 ? 'No components found' : 'No matching components' });
+      this.emptyStateEl.createEl('p', {
+        text: this.components.length === 0
+          ? 'This SBOM file was readable, but it did not contain any components to inspect.'
+          : 'Try a broader search or clear the current filter.'
+      });
+      this.emptyStateEl.style.display = '';
       this.listEl.style.display = 'none';
       return;
     }
 
     this.emptyStateEl.empty();
+    this.emptyStateEl.style.display = 'none';
     this.listEl.style.display = '';
+
     for (const component of filteredComponents) {
-      this.renderComponentEditor(this.listEl, component);
+      this.renderComponentRow(this.listEl, component);
     }
   }
 
-  private getFilteredComponents(components: ResolvedSbomComponent[]): ResolvedSbomComponent[] {
-    if (!this.searchQuery) {
+  private getFilteredComponents(components: EditableSbomComponent[]): EditableSbomComponent[] {
+    const normalizedQuery = this.searchQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
       return components;
     }
 
     return components.filter((component) => [
       component.originalName,
       component.normalizedName,
-      component.displayName
-    ].join(' ').toLowerCase().includes(this.searchQuery));
+      getComponentDisplayName(component),
+      component.draftEditedName
+    ].join(' ').toLowerCase().includes(normalizedQuery));
   }
 
-  private renderComponentEditor(container: HTMLElement, component: ResolvedSbomComponent): void {
-    const details = container.createEl('details', { cls: 'vulndash-sbom-component' });
-    const summary = details.createEl('summary');
-    summary.createSpan({ text: component.displayName });
-    if (component.displayName !== component.originalName) {
-      summary.createSpan({ text: ` (${component.originalName})` });
-    }
-    if (component.excluded) {
-      summary.createSpan({ text: ' [excluded]' });
-    }
-
-    const form = details.createDiv({ cls: 'vulndash-sbom-component-form' });
-    form.createEl('p', {
+  private renderComponentRow(container: HTMLElement, component: EditableSbomComponent): void {
+    const row = container.createDiv({ cls: 'vulndash-sbom-component-row' });
+    const top = row.createDiv({ cls: 'vulndash-sbom-component-row-top' });
+    const names = top.createDiv({ cls: 'vulndash-sbom-component-names' });
+    const currentNameEl = names.createEl('h3', { text: getComponentDisplayName(component) });
+    names.createEl('p', {
       cls: 'vulndash-sbom-component-meta',
-      text: `Original name: ${component.originalName} | Normalized import: ${component.normalizedName}`
+      text: `Original: ${component.originalName} • Normalized import: ${component.normalizedName}`
     });
 
-    const nameField = form.createDiv({ cls: 'vulndash-sbom-component-field' });
-    nameField.createEl('label', { text: 'Effective filter name' });
-    const nameInput = nameField.createEl('input', { attr: { type: 'text' } });
-    let draftName = component.editedName ?? component.normalizedName;
-    let committedName = draftName;
-    nameInput.value = committedName;
+    const badges = top.createDiv({ cls: 'vulndash-sbom-badges' });
+    badges.createSpan({
+      cls: `vulndash-badge ${component.excluded ? 'vulndash-badge-warning' : 'vulndash-badge-success'}`,
+      text: component.excluded ? 'Excluded' : 'Included'
+    });
+    if (component.editedName) {
+      badges.createSpan({ cls: 'vulndash-badge vulndash-badge-neutral', text: 'Override active' });
+    }
+
+    const grid = row.createDiv({ cls: 'vulndash-sbom-component-grid' });
+
+    const nameField = grid.createDiv({ cls: 'vulndash-sbom-component-field' });
+    nameField.createEl('label', { text: 'Display name override' });
+    const nameInput = nameField.createEl('input', {
+      attr: {
+        placeholder: component.normalizedName,
+        type: 'text'
+      }
+    });
+    nameInput.value = component.draftEditedName || component.editedName || '';
     nameInput.addEventListener('input', () => {
-      draftName = nameInput.value;
+      component.draftEditedName = nameInput.value;
+      currentNameEl.setText(nameInput.value.trim() || component.editedName || component.normalizedName);
     });
     nameInput.addEventListener('blur', () => {
-      const nextName = draftName.trim() || component.normalizedName;
-      if (nextName === committedName) {
+      const nextEditedName = nameInput.value.trim();
+      if (nextEditedName === (component.editedName ?? '')) {
         return;
       }
 
@@ -138,42 +176,63 @@ export class SbomComponentsModal extends Modal {
       void (async () => {
         try {
           await this.persistComponentChange(component, {
-            editedName: nextName
+            editedName: nextEditedName
           });
-          committedName = nextName;
-          nameInput.value = nextName;
+          if (nextEditedName) {
+            component.editedName = nextEditedName;
+          } else {
+            delete component.editedName;
+          }
+          component.draftEditedName = nextEditedName;
+          currentNameEl.setText(getComponentDisplayName(component));
           nameInput.classList.add('vulndash-input-saved');
-          window.setTimeout(() => {
-            nameInput.classList.remove('vulndash-input-saved');
-          }, 600);
+          window.setTimeout(() => nameInput.classList.remove('vulndash-input-saved'), 600);
+          this.renderComponentList();
         } catch {
-          draftName = committedName;
-          nameInput.value = committedName;
+          component.draftEditedName = component.editedName ?? '';
+          nameInput.value = component.draftEditedName;
+          currentNameEl.setText(getComponentDisplayName(component));
         } finally {
           nameInput.classList.remove('vulndash-input-saving');
         }
       })();
     });
 
-    const excludeField = form.createDiv({ cls: 'vulndash-sbom-component-field' });
-    const excludeLabel = excludeField.createEl('label');
+    const excludeField = grid.createDiv({ cls: 'vulndash-sbom-component-field' });
+    excludeField.createEl('label', { text: 'Filter participation' });
+    const excludeLabel = excludeField.createEl('label', { cls: 'vulndash-sbom-checkbox' });
     const excludeInput = excludeLabel.createEl('input', { attr: { type: 'checkbox' } });
     excludeInput.checked = component.excluded;
-    excludeLabel.appendText(' Exclude from computed filters');
+    excludeLabel.appendText(' Exclude this component from computed filters');
     excludeInput.addEventListener('change', () => {
-      void this.persistComponentChange(component, { excluded: excludeInput.checked });
+      const nextExcluded = excludeInput.checked;
+      void (async () => {
+        try {
+          await this.persistComponentChange(component, { excluded: nextExcluded });
+          component.excluded = nextExcluded;
+          this.renderComponentList();
+        } catch {
+          excludeInput.checked = component.excluded;
+        }
+      })();
     });
 
-    const actions = form.createDiv({ cls: 'vulndash-sbom-component-actions' });
-    const resetButton = actions.createEl('button', { text: 'Reset override' });
+    const actions = row.createDiv({ cls: 'vulndash-sbom-component-actions' });
+    const resetButton = actions.createEl('button', { text: 'Reset Override' });
     resetButton.addEventListener('click', () => {
-      void this.persistComponentChange(component, {
-        editedName: '',
-        excluded: false
-      });
+      void (async () => {
+        await this.persistComponentChange(component, {
+          editedName: '',
+          excluded: false
+        });
+        delete component.editedName;
+        component.draftEditedName = '';
+        component.excluded = false;
+        this.renderComponentList();
+      })();
     });
 
-    const removeButton = actions.createEl('button', { text: 'Remove component' });
+    const removeButton = actions.createEl('button', { text: 'Remove From Filters' });
     removeButton.addClass('mod-warning');
     removeButton.addEventListener('click', () => {
       void this.removeComponent(component);
@@ -181,7 +240,7 @@ export class SbomComponentsModal extends Modal {
   }
 
   private async persistComponentChange(
-    component: ResolvedSbomComponent,
+    component: EditableSbomComponent,
     updates: { editedName?: string; excluded?: boolean }
   ): Promise<void> {
     const editedName = updates.editedName?.trim() ?? component.editedName ?? '';
@@ -190,13 +249,19 @@ export class SbomComponentsModal extends Modal {
       excluded: updates.excluded ?? component.excluded
     });
     this.onStateChanged?.();
-    await this.renderAsync();
   }
 
-  private async removeComponent(component: ResolvedSbomComponent): Promise<void> {
+  private async removeComponent(component: EditableSbomComponent): Promise<void> {
     await this.plugin.removeSbomComponent(this.sbomId, component.originalName);
-    new Notice('SBOM component removed from computed filters.');
+    component.excluded = true;
+    new Notice('Component removed from computed filters. Use Reset Override to include it again.');
     this.onStateChanged?.();
-    await this.renderAsync();
+    this.renderComponentList();
+  }
+
+  private renderMessageState(container: HTMLElement, title: string, body: string): void {
+    const state = container.createDiv({ cls: 'vulndash-empty-state' });
+    state.createEl('h3', { text: title });
+    state.createEl('p', { text: body });
   }
 }

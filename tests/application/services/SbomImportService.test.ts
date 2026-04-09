@@ -128,3 +128,33 @@ test('returns a safe failure for missing files', async () => {
   assert.equal(result.error, 'ENOENT');
   assert.equal(service.getRuntimeState('sbom-1'), null);
 });
+
+test('validates readable CycloneDX-like JSON files before they are attached', async () => {
+  const service = new SbomImportService(new InMemorySbomReader({
+    'reports/sbom.json': JSON.stringify({
+      bomFormat: 'CycloneDX',
+      components: [{ name: 'portal-web' }, { name: 'api-gateway' }]
+    })
+  }));
+
+  const result = await service.validateSbomPath('reports/sbom.json');
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.normalizedPath, 'reports/sbom.json');
+  assert.equal(result.componentCount, 2);
+});
+
+test('rejects JSON files that do not look like CycloneDX SBOM documents', async () => {
+  const service = new SbomImportService(new InMemorySbomReader({
+    'reports/notes.json': JSON.stringify({
+      title: 'not an sbom'
+    })
+  }));
+
+  const result = await service.validateSbomPath('reports/notes.json');
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'The selected file is valid JSON, but it does not look like a CycloneDX SBOM.');
+});
