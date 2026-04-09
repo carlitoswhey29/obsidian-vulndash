@@ -7,6 +7,9 @@ import {
 import { AlertEngine } from './application/services/AlertEngine';
 import { buildFeedsFromConfig } from './application/services/FeedFactory';
 import { PollingOrchestrator } from './application/services/PollingOrchestrator';
+import { SbomComparisonService } from './application/services/SbomComparisonService';
+import { SbomFilterMergeService } from './application/services/SbomFilterMergeService';
+import { SbomImportService, type SbomFileChangeStatus } from './application/services/SbomImportService';
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from './application/services/SyncOutcomeDiagnostics';
 import type { ColumnVisibility, FeedConfig, ImportedSbomComponent, ImportedSbomConfig, VulnDashSettings } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
@@ -30,7 +33,7 @@ const DEFAULT_FEEDS: FeedConfig[] = [
   { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true }
 ];
 
-const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 3;
 
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
@@ -160,7 +163,7 @@ const normalizeRuntimeSettings = (settings: VulnDashSettings, previous?: VulnDas
   };
 };
 
-const migrateLegacySettings = (settings: Partial<VulnDashSettings>): VulnDashSettings => {
+export const migrateLegacySettings = (settings: Partial<VulnDashSettings>): VulnDashSettings => {
   const hasDynamicFeeds = Array.isArray(settings.feeds) && settings.feeds.length > 0;
   const feeds = hasDynamicFeeds
     ? (settings.feeds ?? []).map((feed) => cloneFeedConfig(feed))
@@ -229,11 +232,25 @@ const migrateLegacySettings = (settings: Partial<VulnDashSettings>): VulnDashSet
   });
 };
 
+const createEmptySbomConfig = (index: number): ImportedSbomConfig => ({
+  id: `sbom-${Date.now()}-${index + 1}`,
+  label: `SBOM ${index + 1}`,
+  path: '',
+  namespace: '',
+  enabled: true,
+  components: [],
+  lastImportedAt: null,
+  lastImportHash: null,
+  lastImportError: null
+});
+
 export default class VulnDashPlugin extends Plugin {
   private settings: VulnDashSettings = DEFAULT_SETTINGS;
   private stopPolling: (() => void) | null = null;
   private pollingEnabled = false;
   private readonly alertEngine = new AlertEngine();
+  private readonly sbomComparisonService = new SbomComparisonService();
+  private readonly sbomFilterMergeService = new SbomFilterMergeService();
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private previousVisibleIds = new Set<string>();
@@ -306,12 +323,11 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async updateSettings(next: VulnDashSettings): Promise<void> {
-    this.settings = normalizeRuntimeSettings(next, this.settings);
-    await this.saveSettings();
-    this.restartPolling();
-    this.updateViewSettings();
-    this.updateViewPollingState();
-    await this.refreshNow();
+    await this.applySettings(next, { refetchRemoteData: true, restartPolling: true });
+  }
+
+  public async updateLocalSettings(next: VulnDashSettings): Promise<void> {
+    await this.applySettings(next, { recomputeFilters: true });
   }
 
   public getSettings(): VulnDashSettings {
@@ -332,6 +348,153 @@ export default class VulnDashPlugin extends Plugin {
 
   public async importProductFiltersFromSbom(): Promise<void> {
     new Notice('Legacy SBOM import has been retired. Configure SBOM entries under the new multi-SBOM settings flow.');
+  }
+
+  public async addSbom(): Promise<void> {
+    const nextSboms = [...this.settings.sboms, createEmptySbomConfig(this.settings.sboms.length)];
+    await this.applySettings({ ...this.settings, sboms: nextSboms }, { recomputeFilters: true });
+  }
+
+  public async removeSbom(sbomId: string): Promise<void> {
+    const nextSboms = this.settings.sboms.filter((sbom) => sbom.id !== sbomId);
+    await this.applySettings({ ...this.settings, sboms: nextSboms }, { recomputeFilters: true });
+  }
+
+  public async updateSbomConfig(sbomId: string, updates: Partial<ImportedSbomConfig>): Promise<void> {
+    const nextSboms = this.settings.sboms.map((sbom) => {
+      if (sbom.id !== sbomId) {
+        return sbom;
+      }
+
+      return cloneImportedSbomConfig({
+        ...sbom,
+        ...updates,
+        components: updates.components ?? sbom.components
+      }, 0);
+    });
+
+    await this.applySettings({ ...this.settings, sboms: nextSboms }, { recomputeFilters: true });
+  }
+
+  public async updateSbomComponent(sbomId: string, componentId: string, updates: Partial<ImportedSbomComponent>): Promise<void> {
+    const nextSboms = this.settings.sboms.map((sbom) => {
+      if (sbom.id !== sbomId) {
+        return sbom;
+      }
+
+      return {
+        ...sbom,
+        components: sbom.components.map((component, index) => (
+          component.id === componentId
+            ? normalizeImportedSbomComponent({ ...component, ...updates }, index)
+            : component
+        ))
+      };
+    });
+
+    await this.applySettings({ ...this.settings, sboms: nextSboms }, { recomputeFilters: true });
+  }
+
+  public async removeSbomComponent(sbomId: string, componentId: string): Promise<void> {
+    const nextSboms = this.settings.sboms.map((sbom) => (
+      sbom.id === sbomId
+        ? { ...sbom, components: sbom.components.filter((component) => component.id !== componentId) }
+        : sbom
+    ));
+
+    await this.applySettings({ ...this.settings, sboms: nextSboms }, { recomputeFilters: true });
+  }
+
+  public async recomputeFilters(): Promise<void> {
+    const productFilters = this.sbomFilterMergeService.merge(this.settings);
+    const nextSettings = normalizeRuntimeSettings({
+      ...this.settings,
+      productFilters
+    }, this.settings);
+    const filtersChanged = !areStringListsEqual(nextSettings.productFilters, this.settings.productFilters);
+
+    this.settings = nextSettings;
+    if (filtersChanged) {
+      await this.saveSettings();
+    }
+
+    this.updateViewSettings();
+    this.updateViewPollingState();
+    await this.processData(this.cachedVulnerabilities);
+  }
+
+  public async syncSbom(sbomId: string): Promise<{ message: string; success: boolean }> {
+    const sbom = this.settings.sboms.find((entry) => entry.id === sbomId);
+    if (!sbom) {
+      return { message: 'SBOM entry was not found.', success: false };
+    }
+
+    const result = await this.getSbomImportService().importSbom(sbom);
+    if (!result.success) {
+      await this.updateSbomConfig(sbomId, { lastImportError: result.error });
+      return { message: result.error, success: false };
+    }
+
+    const nextSboms = this.settings.sboms.map((entry) => entry.id === sbomId ? result.sbom : entry);
+    await this.applySettings({ ...this.settings, sboms: nextSboms }, { recomputeFilters: true });
+    return {
+      message: `Imported ${result.importedComponentCount} components from ${result.sbom.label}.`,
+      success: true
+    };
+  }
+
+  public async syncAllSboms(): Promise<{ failed: number; succeeded: number; total: number }> {
+    const importService = this.getSbomImportService();
+    let succeeded = 0;
+    let failed = 0;
+
+    const nextSboms = await Promise.all(this.settings.sboms.map(async (sbom) => {
+      const result = await importService.importSbom(sbom);
+      if (!result.success) {
+        failed += 1;
+        return {
+          ...sbom,
+          lastImportError: result.error
+        };
+      }
+
+      succeeded += 1;
+      return result.sbom;
+    }));
+
+    await this.applySettings({ ...this.settings, sboms: nextSboms }, { recomputeFilters: true });
+    return {
+      failed,
+      succeeded,
+      total: this.settings.sboms.length
+    };
+  }
+
+  public async getSbomFileChangeStatus(sbomId: string): Promise<SbomFileChangeStatus> {
+    const sbom = this.settings.sboms.find((entry) => entry.id === sbomId);
+    if (!sbom) {
+      return {
+        currentHash: null,
+        error: 'SBOM entry was not found.',
+        status: 'error'
+      };
+    }
+
+    return this.getSbomImportService().getFileChangeStatus(sbom);
+  }
+
+  public getSbomById(sbomId: string): ImportedSbomConfig | undefined {
+    return this.settings.sboms.find((sbom) => sbom.id === sbomId);
+  }
+
+  public compareSboms(leftSbomId: string, rightSbomId: string) {
+    const left = this.getSbomById(leftSbomId);
+    const right = this.getSbomById(rightSbomId);
+    if (!left || !right) {
+      return null;
+    }
+
+    return this.sbomComparisonService.compare(left, right);
   }
 
   private async processData(vulnerabilities: Vulnerability[]): Promise<void> {
@@ -625,5 +788,40 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     return { value: '', needsMigration: false, decryptionFailed: true };
+  }
+
+  private async applySettings(
+    next: VulnDashSettings,
+    options: {
+      recomputeFilters?: boolean;
+      refetchRemoteData?: boolean;
+      restartPolling?: boolean;
+    }
+  ): Promise<void> {
+    this.settings = normalizeRuntimeSettings(next, this.settings);
+    await this.saveSettings();
+
+    if (options.restartPolling) {
+      this.restartPolling();
+    }
+
+    this.updateViewSettings();
+    this.updateViewPollingState();
+
+    if (options.recomputeFilters) {
+      await this.recomputeFilters();
+      return;
+    }
+
+    if (options.refetchRemoteData) {
+      await this.refreshNow();
+      return;
+    }
+
+    await this.processData(this.cachedVulnerabilities);
+  }
+
+  private getSbomImportService(): SbomImportService {
+    return new SbomImportService(this.app.vault.adapter);
   }
 }
