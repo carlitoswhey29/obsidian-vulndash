@@ -6,7 +6,14 @@ import { ProductFiltersModal } from './ProductFiltersModal';
 import { SbomManagerModal } from './SbomManagerModal';
 
 interface ComputedProductFiltersSummaryData {
+  activeFilterCount: number;
   contributingSbomCount: number;
+  groups: Array<{
+    filters: string[];
+    label: string;
+    sbomId: string;
+  }>;
+  manualFilterCount: number;
   enabledSbomCount: number;
   filters: string[];
 }
@@ -489,7 +496,10 @@ export class VulnDashSettingTab extends PluginSettingTab {
     const renderId = ++this.computedProductFiltersRenderId;
     const settings = this.plugin.getSettings();
     let summaryData: ComputedProductFiltersSummaryData = {
+      activeFilterCount: 0,
       contributingSbomCount: 0,
+      groups: [],
+      manualFilterCount: this.normalizeProductFilters(settings.manualProductFilters).length,
       enabledSbomCount: settings.sboms.filter((sbom) => sbom.enabled).length,
       filters: []
     };
@@ -519,9 +529,12 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
     viewButton.addEventListener('click', () => {
       new ProductFiltersModal(this.app, {
+        activeFilterCount: summaryData.activeFilterCount,
         contributingSbomCount: summaryData.contributingSbomCount,
         enabledSbomCount: summaryData.enabledSbomCount,
         filters: summaryData.filters,
+        groups: summaryData.groups,
+        manualFilterCount: summaryData.manualFilterCount,
         mode: this.plugin.getSettings().sbomImportMode
       }).open();
     });
@@ -593,21 +606,34 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
   private async getComputedProductFiltersSummaryData(): Promise<ComputedProductFiltersSummaryData> {
     const enabledSboms = this.plugin.getSettings().sboms.filter((sbom) => sbom.enabled);
+    const settings = this.plugin.getSettings();
+    const manualFilters = this.normalizeProductFilters(settings.manualProductFilters);
     const resolvedComponentGroups = await Promise.all(enabledSboms.map(async (sbom) => {
       const components = await this.plugin.getSbomComponents(sbom.id);
-      const filters = (components ?? [])
+      const filters = this.normalizeProductFilters((components ?? [])
         .filter((component) => !component.excluded)
         .map((component) => component.displayName.trim())
-        .filter((component) => component.length > 0);
+        .filter((component) => component.length > 0));
 
-      return { filters };
+      return {
+        filters,
+        label: sbom.label || 'Untitled SBOM',
+        sbomId: sbom.id
+      };
     }));
 
-    const filters = Array.from(new Set(resolvedComponentGroups.flatMap((group) => group.filters)))
-      .sort((left, right) => left.localeCompare(right));
+    const filters = this.normalizeProductFilters(resolvedComponentGroups.flatMap((group) => group.filters));
+    const activeFilterCount = settings.sbomImportMode === 'append'
+      ? this.normalizeProductFilters([...manualFilters, ...filters]).length
+      : filters.length;
 
     return {
+      activeFilterCount,
       contributingSbomCount: resolvedComponentGroups.filter((group) => group.filters.length > 0).length,
+      groups: resolvedComponentGroups
+        .filter((group) => group.filters.length > 0)
+        .sort((left, right) => left.label.localeCompare(right.label)),
+      manualFilterCount: manualFilters.length,
       enabledSbomCount: enabledSboms.length,
       filters
     };
@@ -628,6 +654,10 @@ export class VulnDashSettingTab extends PluginSettingTab {
     const sbomContext = summaryData.contributingSbomCount === summaryData.enabledSbomCount
       ? `${summaryData.enabledSbomCount} enabled SBOM${summaryData.enabledSbomCount === 1 ? '' : 's'}`
       : `${summaryData.contributingSbomCount} of ${summaryData.enabledSbomCount} enabled SBOMs`;
+
+    if (mode === 'append' && summaryData.manualFilterCount > 0) {
+      return `${summaryData.filters.length} computed filter${summaryData.filters.length === 1 ? '' : 's'} are currently active. Computed from ${sbomContext} in append mode, with ${summaryData.manualFilterCount} manual filter${summaryData.manualFilterCount === 1 ? '' : 's'} also active.`;
+    }
 
     return `${summaryData.filters.length} computed filter${summaryData.filters.length === 1 ? '' : 's'} are currently active. Computed from ${sbomContext} in ${mode} mode.`;
   }
@@ -677,6 +707,13 @@ export class VulnDashSettingTab extends PluginSettingTab {
       buttonEl.textContent = 'Recompute';
       new Notice('Unable to recompute computed filters.');
     }
+  }
+
+  private normalizeProductFilters(filters: string[]): string[] {
+    return Array.from(new Set(filters
+      .map((filter) => filter.trim())
+      .filter((filter) => filter.length > 0)))
+      .sort((left, right) => left.localeCompare(right));
   }
 
   private async refreshSbomSummary(setting: Setting): Promise<void> {
