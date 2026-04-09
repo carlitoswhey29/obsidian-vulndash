@@ -1,70 +1,74 @@
-# VulnDash Obsidian Plugin
+# VulnDash
 
-VulnDash is an Obsidian plugin that provides a near-live CVE dashboard with polling, filtering, and severity-based alerting.
+VulnDash is a near-live vulnerability and Common Vulnerabilities and Exposures (CVE) dashboard integrated directly into your Obsidian vault. It aggregates security advisories from multiple sources, filters them against your specific software stack, and automatically alerts you to critical threats.
 
-## Security Notes
+## Features
 
-- Rendering is safe by construction: no `innerHTML` is used; all user/API strings are sanitized before rendering.
-- API keys are optional and not logged.
-- Polling uses async operations and exponential backoff for transient/rate-limit failures.
-- Build includes CycloneDX SBOM generation for supply-chain visibility.
+* **Unified Dashboard**: View a sortable, filterable table of vulnerabilities fetched from the National Vulnerability Database (NVD), GitHub Advisories, specific GitHub repositories, or custom JSON feeds.
+* **SBOM Integration**: Import CycloneDX Software Bill of Materials (SBOM) JSON files directly from your vault. VulnDash automatically parses these files to filter the dashboard, showing only vulnerabilities relevant to the components you actually use.
+* **Smart Alerting & Note Creation**: Get native Obsidian notices or OS-level desktop notifications when new threats matching your stack are detected. Automatically generate Obsidian notes for new HIGH or CRITICAL vulnerabilities to document mitigation strategies.
+* **Advanced Filtering**: Filter noise by setting minimum CVSS scores, severity levels, or using keyword and regular expression matching.
+* **Local & Secure**: API keys are encrypted using the Web Crypto API before being stored locally on your device. They are never logged or exposed in plain text.
 
-## Build, SBOM, and Test in Obsidian
+## Installation
 
-1. Install dependencies:
+### Community Plugins (Recommended)
+Once approved and merged, you will be able to install VulnDash directly from the Obsidian Community Plugins directory.
+1. Open Obsidian **Settings -> Community Plugins**.
+2. Disable "Safe Mode" if it is active.
+3. Click "Browse" and search for "VulnDash".
+4. Click "Install" and then "Enable".
+
+### Manual Installation
+1. Download the latest release from the GitHub repository.
+2. Extract the contents into your vault's `.obsidian/plugins/vulndash` directory.
+3. Ensure the folder contains `main.js`, `manifest.json`, and `styles.css`.
+4. Reload Obsidian and enable the plugin in **Settings -> Community Plugins**.
+
+## Configuration
+
+By default, VulnDash can fetch data anonymously, but you will quickly hit API rate limits. It is highly recommended to configure your own API keys.
+
+1. Go to **Settings > VulnDash**.
+2. Under **Integration & Export**, provide your **NVD API key** and a fine-grained **GitHub token**. 
+3. Adjust your **Polling interval** and **Cache duration** to suit your needs.
+
+### Adding SBOMs
+To make VulnDash fully aware of your environment, configure it to watch your software stack:
+1. Place a valid CycloneDX SBOM `.json` file anywhere in your Obsidian vault.
+2. Go to **Settings > VulnDash** and click **Manage SBOMs** under the SBOM Workspace section.
+3. Click **Add SBOM** and use the fuzzy search to select your JSON file.
+4. VulnDash will parse the components and compute a list of product filters. You can inspect these components, rename them to match CVE naming conventions, or exclude them from filtering entirely.
+
+## Usage
+
+Once enabled and configured, you can open the dashboard in two ways:
+* Click the ribbon icon in the Obsidian left-hand sidebar.
+* Open the Command Palette (`Ctrl/Cmd + P`) and run the command: `VulnDash: Open vulnerability dashboard`.
+
+Inside the dashboard:
+* **Sorting**: Click any column header (ID, Title, Source, Severity, CVSS, Published) to sort the vulnerabilities.
+* **Searching**: Use the search bar at the top of the dashboard to quickly filter visible results.
+* **Expanding Details**: Click on any vulnerability row to expand it. This reveals the full markdown-rendered summary and external reference links to the original advisories.
+
+## Development
+
+If you wish to compile the plugin locally:
+
+1. Clone the repository and install dependencies:
    ```bash
    npm install
    ```
-2. Run strict checks and compile plugin:
+2. Run strict checks and compile the plugin:
    ```bash
    npm run build
    ```
-3. Generate CycloneDX SBOM JSON:
+3. Generate the CycloneDX SBOM JSON for the plugin itself:
    ```bash
    npm run sbom
    ```
-4. Run full secure pipeline:
-   ```bash
-   npm run build:secure
-   ```
-5. Copy plugin artifacts to your vault's plugin folder:
+4. Copy the compiled artifacts (`manifest.json`, `main.js`, `styles.css`) to your vault's plugin folder:
    ```bash
    mkdir -p <Vault>/.obsidian/plugins/vulndash
-   cp manifest.json main.js styles.css <Vault>/.obsidian/plugins/vulndash/
+   cp dist/manifest.json dist/main.js dist/styles.css <Vault>/.obsidian/plugins/vulndash/
    ```
-6. In Obsidian: **Settings → Community Plugins → Reload plugins**, then enable **VulnDash**.
-7. Open VulnDash via ribbon icon or command palette: `Open vulnerability dashboard`.
-
-## Operational Guidance
-
-- Prefer setting a GitHub token (fine-grained) and NVD API key to reduce rate limits.
-- Use filtering settings to reduce noise (keywords, products, minimum CVSS/severity).
-
-## Sync Architecture
-
-- **Transport vs client responsibilities**
-  - `HttpClient` is transport-generic and only handles HTTP execution plus typed transport errors.
-  - Source clients (`GitHubAdvisoryClient`, `NvdClient`) own pagination and source-specific query mapping.
-- **Cursor semantics**
-  - `since` always means *fetch records changed since timestamp*.
-  - Cursor state is persisted per source (`sourceSyncCursor`) and advanced only after a successful source sync.
-- **Merge behavior**
-  - Polling merges by stable source-aware key (`<source>:<id>`).
-  - Incoming records replace cached records only when normalized freshness (`updatedAt`) is newer.
-  - Dedup is deterministic across pages and overlap windows.
-- **Retry / rate-limit handling**
-  - Retryable errors (timeouts, network, 429, transient 5xx) use exponential backoff.
-  - `Retry-After` is honored for rate limits.
-  - Retry budget is bounded and sync fails cleanly when exhausted.
-- **Per-source isolation**
-  - Each source sync runs with independent cursor, warnings, retries, and result status.
-  - Partial source failure does not discard successful records from other sources.
-
-### Polling cycle sequence (simplified)
-
-1. Read source cursor.
-2. Apply overlap window to compute effective `since`.
-3. Fetch paginated data with source client bounds (`maxPages`, `maxItems`).
-4. Deduplicate and merge into cache with freshness checks.
-5. If full source sync succeeds, advance only that source cursor.
-6. Emit structured sync result/log summary.
