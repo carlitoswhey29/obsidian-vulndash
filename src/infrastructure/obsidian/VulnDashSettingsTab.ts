@@ -1,8 +1,25 @@
-import { App, PluginSettingTab, Setting, TextComponent } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import type { ColumnVisibility, VulnDashSettings } from '../../application/services/types';
 import { summarizeSbomWorkspace } from '../../application/services/SbomWorkspaceService';
 import VulnDashPlugin, { DEFAULT_SETTINGS } from '../../plugin';
+import { ProductFiltersModal } from './ProductFiltersModal';
 import { SbomManagerModal } from './SbomManagerModal';
+
+interface ComputedProductFiltersSummaryData {
+  activeFilterCount: number;
+  contributingSbomCount: number;
+  groups: Array<{
+    filters: string[];
+    label: string;
+    sbomId: string;
+  }>;
+  manualFilterCount: number;
+  enabledSbomCount: number;
+  filters: string[];
+}
+
+const PRODUCT_FILTER_PREVIEW_LIMIT = 5;
+const BUTTON_FEEDBACK_MS = 1_200;
 
 const getNvdFeed = (settings: VulnDashSettings) =>
   settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'nvd' }> =>
@@ -12,6 +29,8 @@ const getGitHubAdvisoryFeed = (settings: VulnDashSettings) =>
     feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
 
 export class VulnDashSettingTab extends PluginSettingTab {
+  private computedProductFiltersRenderId = 0;
+
   public constructor(app: App, private readonly plugin: VulnDashPlugin) {
     super(app, plugin);
   }
@@ -88,11 +107,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
       }
     });
 
-    containerEl.createEl('p', {
-      text: settings.productFilters.length === 0
-        ? 'Computed product filters: none.'
-        : `Computed product filters (${settings.productFilters.length}): ${settings.productFilters.slice(0, 12).join(', ')}${settings.productFilters.length > 12 ? ' ...' : ''}`
-    });
+    this.renderComputedProductFiltersSummary(containerEl);
 
     const minCvssSetting = new Setting(containerEl)
       .setName('Minimum CVSS score');
@@ -477,6 +492,105 @@ export class VulnDashSettingTab extends PluginSettingTab {
     });
   }
 
+  private renderComputedProductFiltersSummary(containerEl: HTMLElement): void {
+    const renderId = ++this.computedProductFiltersRenderId;
+    const settings = this.plugin.getSettings();
+    let summaryData: ComputedProductFiltersSummaryData = {
+      activeFilterCount: 0,
+      contributingSbomCount: 0,
+      groups: [],
+      manualFilterCount: this.normalizeProductFilters(settings.manualProductFilters).length,
+      enabledSbomCount: settings.sboms.filter((sbom) => sbom.enabled).length,
+      filters: []
+    };
+
+    const card = containerEl.createDiv({ cls: 'vulndash-product-filters-card' });
+    const header = card.createDiv({ cls: 'vulndash-product-filters-card-header' });
+    header.createEl('h3', { cls: 'vulndash-product-filters-card-title', text: 'Computed Product Filters' });
+    const countChip = header.createSpan({
+      cls: 'vulndash-product-filters-chip vulndash-product-filters-chip-muted',
+      text: 'Loading'
+    });
+
+    const descriptionEl = card.createEl('p', {
+      cls: 'vulndash-product-filters-card-description',
+      text: 'Loading derived product filters from the current SBOM workspace.'
+    });
+
+    const chipRow = card.createDiv({ cls: 'vulndash-product-filters-chip-row' });
+    this.createProductFilterChip(chipRow, 'Loading filters', true);
+
+    const actions = card.createDiv({ cls: 'vulndash-product-filters-summary-actions' });
+    const viewButton = actions.createEl('button', { text: 'View Filters' });
+    const copyButton = actions.createEl('button', { text: 'Copy All' });
+    const recomputeButton = actions.createEl('button', { text: 'Recompute' });
+    viewButton.disabled = true;
+    copyButton.disabled = true;
+
+    viewButton.addEventListener('click', () => {
+      new ProductFiltersModal(this.app, {
+        activeFilterCount: summaryData.activeFilterCount,
+        contributingSbomCount: summaryData.contributingSbomCount,
+        enabledSbomCount: summaryData.enabledSbomCount,
+        filters: summaryData.filters,
+        groups: summaryData.groups,
+        manualFilterCount: summaryData.manualFilterCount,
+        mode: this.plugin.getSettings().sbomImportMode
+      }).open();
+    });
+
+    copyButton.addEventListener('click', () => {
+      if (summaryData.filters.length === 0) {
+        return;
+      }
+
+      void this.copyFiltersToClipboard(summaryData.filters, copyButton, 'Copy All');
+    });
+
+    recomputeButton.addEventListener('click', () => {
+      void this.recomputeProductFilters(recomputeButton);
+    });
+
+    void (async () => {
+      try {
+        const nextSummaryData = await this.getComputedProductFiltersSummaryData();
+        if (renderId !== this.computedProductFiltersRenderId) {
+          return;
+        }
+
+        summaryData = nextSummaryData;
+        countChip.textContent = `${summaryData.filters.length} active`;
+        descriptionEl.textContent = this.getComputedProductFiltersDescription(summaryData, settings.sbomImportMode);
+        viewButton.disabled = false;
+        copyButton.disabled = summaryData.filters.length === 0;
+
+        chipRow.empty();
+        if (summaryData.filters.length === 0) {
+          this.createProductFilterChip(chipRow, 'No computed filters', true);
+          return;
+        }
+
+        for (const filter of summaryData.filters.slice(0, PRODUCT_FILTER_PREVIEW_LIMIT)) {
+          this.createProductFilterChip(chipRow, filter);
+        }
+
+        const hiddenCount = summaryData.filters.length - PRODUCT_FILTER_PREVIEW_LIMIT;
+        if (hiddenCount > 0) {
+          this.createProductFilterChip(chipRow, `+${hiddenCount} more`, true);
+        }
+      } catch {
+        if (renderId !== this.computedProductFiltersRenderId) {
+          return;
+        }
+
+        countChip.textContent = 'Unavailable';
+        descriptionEl.textContent = 'Unable to load computed filters from the current SBOM workspace.';
+        chipRow.empty();
+        this.createProductFilterChip(chipRow, 'Unavailable', true);
+      }
+    })();
+  }
+
   private async persistTextValue(text: TextComponent, save: () => Promise<void>): Promise<void> {
     text.inputEl.classList.add('vulndash-input-saving');
     try {
@@ -488,6 +602,118 @@ export class VulnDashSettingTab extends PluginSettingTab {
     } finally {
       text.inputEl.classList.remove('vulndash-input-saving');
     }
+  }
+
+  private async getComputedProductFiltersSummaryData(): Promise<ComputedProductFiltersSummaryData> {
+    const enabledSboms = this.plugin.getSettings().sboms.filter((sbom) => sbom.enabled);
+    const settings = this.plugin.getSettings();
+    const manualFilters = this.normalizeProductFilters(settings.manualProductFilters);
+    const resolvedComponentGroups = await Promise.all(enabledSboms.map(async (sbom) => {
+      const components = await this.plugin.getSbomComponents(sbom.id);
+      const filters = this.normalizeProductFilters((components ?? [])
+        .filter((component) => !component.excluded)
+        .map((component) => component.displayName.trim())
+        .filter((component) => component.length > 0));
+
+      return {
+        filters,
+        label: sbom.label || 'Untitled SBOM',
+        sbomId: sbom.id
+      };
+    }));
+
+    const filters = this.normalizeProductFilters(resolvedComponentGroups.flatMap((group) => group.filters));
+    const activeFilterCount = settings.sbomImportMode === 'append'
+      ? this.normalizeProductFilters([...manualFilters, ...filters]).length
+      : filters.length;
+
+    return {
+      activeFilterCount,
+      contributingSbomCount: resolvedComponentGroups.filter((group) => group.filters.length > 0).length,
+      groups: resolvedComponentGroups
+        .filter((group) => group.filters.length > 0)
+        .sort((left, right) => left.label.localeCompare(right.label)),
+      manualFilterCount: manualFilters.length,
+      enabledSbomCount: enabledSboms.length,
+      filters
+    };
+  }
+
+  private getComputedProductFiltersDescription(
+    summaryData: ComputedProductFiltersSummaryData,
+    mode: VulnDashSettings['sbomImportMode']
+  ): string {
+    if (summaryData.filters.length === 0) {
+      if (summaryData.enabledSbomCount === 0) {
+        return 'No computed filters are currently active. Enable an SBOM to derive filters automatically.';
+      }
+
+      return `No computed filters are currently active. Derived filters are computed from enabled SBOMs in ${mode} mode.`;
+    }
+
+    const sbomContext = summaryData.contributingSbomCount === summaryData.enabledSbomCount
+      ? `${summaryData.enabledSbomCount} enabled SBOM${summaryData.enabledSbomCount === 1 ? '' : 's'}`
+      : `${summaryData.contributingSbomCount} of ${summaryData.enabledSbomCount} enabled SBOMs`;
+
+    if (mode === 'append' && summaryData.manualFilterCount > 0) {
+      return `${summaryData.filters.length} computed filter${summaryData.filters.length === 1 ? '' : 's'} are currently active. Computed from ${sbomContext} in append mode, with ${summaryData.manualFilterCount} manual filter${summaryData.manualFilterCount === 1 ? '' : 's'} also active.`;
+    }
+
+    return `${summaryData.filters.length} computed filter${summaryData.filters.length === 1 ? '' : 's'} are currently active. Computed from ${sbomContext} in ${mode} mode.`;
+  }
+
+  private createProductFilterChip(containerEl: HTMLElement, label: string, muted = false): void {
+    containerEl.createSpan({
+      cls: `vulndash-product-filters-chip${muted ? ' vulndash-product-filters-chip-muted' : ''}`,
+      text: label
+    });
+  }
+
+  private async copyFiltersToClipboard(filters: string[], buttonEl: HTMLButtonElement, defaultLabel: string): Promise<void> {
+    const buttonWasDisabled = buttonEl.disabled;
+    buttonEl.disabled = true;
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API unavailable');
+      }
+
+      await navigator.clipboard.writeText(filters.join('\n'));
+      buttonEl.textContent = 'Copied';
+      window.setTimeout(() => {
+        if (!buttonEl.isConnected) {
+          return;
+        }
+
+        buttonEl.textContent = defaultLabel;
+        buttonEl.disabled = buttonWasDisabled;
+      }, BUTTON_FEEDBACK_MS);
+    } catch {
+      buttonEl.textContent = defaultLabel;
+      buttonEl.disabled = buttonWasDisabled;
+      new Notice('Unable to copy computed filters.');
+    }
+  }
+
+  private async recomputeProductFilters(buttonEl: HTMLButtonElement): Promise<void> {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Recomputing...';
+
+    try {
+      await this.plugin.recomputeFilters();
+      this.display();
+    } catch {
+      buttonEl.disabled = false;
+      buttonEl.textContent = 'Recompute';
+      new Notice('Unable to recompute computed filters.');
+    }
+  }
+
+  private normalizeProductFilters(filters: string[]): string[] {
+    return Array.from(new Set(filters
+      .map((filter) => filter.trim())
+      .filter((filter) => filter.length > 0)))
+      .sort((left, right) => left.localeCompare(right));
   }
 
   private async refreshSbomSummary(setting: Setting): Promise<void> {
