@@ -8,7 +8,7 @@ import { AlertEngine } from './application/services/AlertEngine';
 import { buildFeedsFromConfig } from './application/services/FeedFactory';
 import { PollingOrchestrator } from './application/services/PollingOrchestrator';
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from './application/services/SyncOutcomeDiagnostics';
-import type { ColumnVisibility, FeedConfig, VulnDashSettings } from './application/services/types';
+import type { ColumnVisibility, FeedConfig, ImportedSbomComponent, ImportedSbomConfig, VulnDashSettings } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
 import { HttpClient } from './infrastructure/api/HttpClient';
 import { buildVulnerabilityNoteBody } from './infrastructure/obsidian/VulnerabilityNote';
@@ -30,10 +30,13 @@ const DEFAULT_FEEDS: FeedConfig[] = [
   { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true }
 ];
 
+const SETTINGS_VERSION = 3;
+
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
   pollOnStartup: true,
   keywordFilters: [],
+  manualProductFilters: [],
   productFilters: [],
   minSeverity: 'MEDIUM',
   minCvssScore: 4.0,
@@ -52,6 +55,9 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
   autoNoteCreationEnabled: false,
   autoHighNoteCreationEnabled: false,
   autoNoteFolder: 'VulnDash Alerts',
+  sboms: [],
+  sbomImportMode: 'append',
+  sbomAutoApplyFilters: true,
   sbomPath: '',
   syncControls: {
     maxPages: 10,
@@ -63,19 +69,96 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
     debugHttpMetadata: false
   },
   sourceSyncCursor: {},
-  settingsVersion: 2,
+  settingsVersion: SETTINGS_VERSION,
   feeds: DEFAULT_FEEDS.map((feed) => ({ ...feed }))
 };
 
-interface SbomComponent {
-  name?: unknown;
-}
-
-interface SbomDocument {
-  components?: SbomComponent[];
-}
-
 const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
+
+const normalizeStringList = (values: string[]): string[] => Array.from(new Set(values
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0)));
+
+const areStringListsEqual = (left: string[], right: string[]): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+const buildLegacySbomLabel = (path: string): string => {
+  const normalized = normalizePath(path);
+  const segments = normalized.split('/').filter(Boolean);
+  const candidate = segments.at(-1);
+  return candidate && candidate.length > 0 ? candidate : 'SBOM';
+};
+
+const normalizeImportedSbomComponent = (
+  component: Partial<ImportedSbomComponent>,
+  index: number
+): ImportedSbomComponent => {
+  const normalizedName = (component.normalizedName ?? component.name ?? '').trim();
+
+  return {
+    id: component.id?.trim() || `component-${index + 1}`,
+    name: component.name?.trim() || '',
+    normalizedName,
+    version: component.version?.trim() || '',
+    purl: component.purl?.trim() || '',
+    cpe: component.cpe?.trim() || '',
+    bomRef: component.bomRef?.trim() || '',
+    namespace: component.namespace?.trim() || '',
+    enabled: component.enabled ?? true,
+    excluded: component.excluded ?? false
+  };
+};
+
+const cloneImportedSbomConfig = (sbom: Partial<ImportedSbomConfig>, index: number): ImportedSbomConfig => ({
+  id: sbom.id?.trim() || `sbom-${index + 1}`,
+  label: sbom.label?.trim() || buildLegacySbomLabel(sbom.path ?? ''),
+  path: sbom.path?.trim() ? normalizePath(sbom.path) : '',
+  namespace: sbom.namespace?.trim() || '',
+  enabled: sbom.enabled ?? true,
+  components: (sbom.components ?? []).map((component, componentIndex) =>
+    normalizeImportedSbomComponent(component, componentIndex)),
+  lastImportedAt: sbom.lastImportedAt ?? null,
+  lastImportHash: sbom.lastImportHash?.trim() || null,
+  lastImportError: sbom.lastImportError?.trim() || null
+});
+
+const createLegacySbomConfig = (path: string): ImportedSbomConfig => {
+  const normalizedPath = normalizePath(path);
+  return {
+    id: 'sbom-1',
+    label: buildLegacySbomLabel(normalizedPath),
+    path: normalizedPath,
+    namespace: '',
+    enabled: true,
+    components: [],
+    lastImportedAt: null,
+    lastImportHash: null,
+    lastImportError: null
+  };
+};
+
+const normalizeRuntimeSettings = (settings: VulnDashSettings, previous?: VulnDashSettings): VulnDashSettings => {
+  const requestedManualFilters = normalizeStringList(settings.manualProductFilters);
+  const requestedComputedFilters = normalizeStringList(settings.productFilters);
+  const usesLegacyProductFilterEditor = previous !== undefined
+    && areStringListsEqual(requestedManualFilters, previous.manualProductFilters)
+    && !areStringListsEqual(requestedComputedFilters, previous.productFilters);
+  const manualProductFilters = usesLegacyProductFilterEditor
+    ? requestedComputedFilters
+    : requestedManualFilters;
+  const productFilters = usesLegacyProductFilterEditor
+    ? manualProductFilters
+    : requestedComputedFilters;
+
+  return {
+    ...settings,
+    manualProductFilters,
+    productFilters,
+    sboms: settings.sboms.map((sbom, index) => cloneImportedSbomConfig(sbom, index)),
+    sbomPath: '',
+    settingsVersion: SETTINGS_VERSION
+  };
+};
 
 const migrateLegacySettings = (settings: Partial<VulnDashSettings>): VulnDashSettings => {
   const hasDynamicFeeds = Array.isArray(settings.feeds) && settings.feeds.length > 0;
@@ -113,10 +196,26 @@ const migrateLegacySettings = (settings: Partial<VulnDashSettings>): VulnDashSet
   delete cursor.NVD;
   delete cursor.GitHub;
 
-  return {
+  const isCurrentSettingsVersion = (settings.settingsVersion ?? 0) >= SETTINGS_VERSION;
+  const manualProductFilters = normalizeStringList(isCurrentSettingsVersion
+    ? (settings.manualProductFilters ?? [])
+    : (settings.manualProductFilters ?? settings.productFilters ?? []));
+  const productFilters = normalizeStringList(isCurrentSettingsVersion
+    ? (settings.productFilters ?? manualProductFilters)
+    : manualProductFilters);
+  const sboms = Array.isArray(settings.sboms) && settings.sboms.length > 0
+    ? settings.sboms.map((sbom, index) => cloneImportedSbomConfig(sbom, index))
+    : (settings.sbomPath?.trim()
+      ? [createLegacySbomConfig(settings.sbomPath)]
+      : []);
+
+  return normalizeRuntimeSettings({
     ...DEFAULT_SETTINGS,
     ...settings,
-    settingsVersion: 2,
+    manualProductFilters,
+    productFilters,
+    sboms,
+    settingsVersion: SETTINGS_VERSION,
     feeds,
     sourceSyncCursor: cursor,
     columnVisibility: {
@@ -127,7 +226,7 @@ const migrateLegacySettings = (settings: Partial<VulnDashSettings>): VulnDashSet
       ...DEFAULT_SETTINGS.syncControls,
       ...(settings.syncControls ?? {})
     }
-  };
+  });
 };
 
 export default class VulnDashPlugin extends Plugin {
@@ -207,7 +306,7 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async updateSettings(next: VulnDashSettings): Promise<void> {
-    this.settings = next;
+    this.settings = normalizeRuntimeSettings(next, this.settings);
     await this.saveSettings();
     this.restartPolling();
     this.updateViewSettings();
@@ -232,26 +331,7 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async importProductFiltersFromSbom(): Promise<void> {
-    const path = this.settings.sbomPath.trim();
-    if (!path) {
-      new Notice('Set an SBOM path before importing products.');
-      return;
-    }
-
-    try {
-      const raw = await this.app.vault.adapter.read(normalizePath(path));
-      const parsed = JSON.parse(raw) as SbomDocument;
-      const components = parsed.components ?? [];
-      const productFilters = Array.from(new Set(components
-        .map((component) => component.name)
-        .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
-        .map((name) => name.trim())));
-
-      await this.updateSettings({ ...this.settings, productFilters });
-      new Notice(`Imported ${productFilters.length} products from SBOM.`);
-    } catch {
-      new Notice('Unable to read or parse SBOM path.');
-    }
+    new Notice('Legacy SBOM import has been retired. Configure SBOM entries under the new multi-SBOM settings flow.');
   }
 
   private async processData(vulnerabilities: Vulnerability[]): Promise<void> {
@@ -482,7 +562,7 @@ export default class VulnDashPlugin extends Plugin {
       new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
     }
 
-    if (nvdSecret.needsMigration || githubSecret.needsMigration || (loadedSettings?.settingsVersion ?? 0) < 2) {
+    if (nvdSecret.needsMigration || githubSecret.needsMigration || (loadedSettings?.settingsVersion ?? 0) < SETTINGS_VERSION) {
       await this.saveSettings();
     }
   }
@@ -507,10 +587,12 @@ export default class VulnDashPlugin extends Plugin {
     }));
 
     const dataToSave: VulnDashSettings = {
-       ...this.settings,
-       nvdApiKey: encryptedNvd,
-       githubToken: encryptedGithub,
-       feeds
+      ...this.settings,
+      sbomPath: '',
+      settingsVersion: SETTINGS_VERSION,
+      nvdApiKey: encryptedNvd,
+      githubToken: encryptedGithub,
+      feeds
     };
 
     await this.saveData(dataToSave);

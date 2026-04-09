@@ -56,10 +56,39 @@ export type FeedConfig =
   | GitHubRepoFeedConfig
   | GenericJsonFeedConfig;
 
+export interface ImportedSbomComponent {
+  id: string;
+  name: string;
+  normalizedName: string;
+  version: string;
+  purl: string;
+  cpe: string;
+  bomRef: string;
+  namespace: string;
+  enabled: boolean;
+  excluded: boolean;
+}
+
+export interface ImportedSbomConfig {
+  id: string;
+  label: string;
+  path: string;
+  namespace: string;
+  enabled: boolean;
+  components: ImportedSbomComponent[];
+  lastImportedAt: number | null;
+  lastImportHash: string | null;
+  lastImportError: string | null;
+}
+
 export interface VulnDashSettings {
   pollingIntervalMs: number;
   pollOnStartup: boolean;
   keywordFilters: string[];
+  manualProductFilters: string[];
+  /**
+   * Computed filter output. Manual edits should target `manualProductFilters`.
+   */
   productFilters: string[];
   minSeverity: Severity;
   minCvssScore: number;
@@ -78,6 +107,12 @@ export interface VulnDashSettings {
   autoNoteCreationEnabled: boolean;
   autoHighNoteCreationEnabled: boolean;
   autoNoteFolder: string;
+  sboms: ImportedSbomConfig[];
+  sbomImportMode: 'replace' | 'append';
+  sbomAutoApplyFilters: boolean;
+  /**
+   * Legacy-only migration field. New logic must rely on `sboms`.
+   */
   sbomPath: string;
   syncControls: SyncControls;
   sourceSyncCursor: Record<string, string>;
