@@ -149,12 +149,39 @@ export class SbomManagerModal extends Modal {
     value: string,
     onPersist: (value: string) => Promise<void>
   ): void {
+    let draftValue = value;
+    let committedValue = value;
+
     const wrapper = container.createDiv({ cls: 'vulndash-sbom-field' });
     wrapper.createEl('label', { text: label });
     const input = wrapper.createEl('input', { attr: { type: 'text' } });
     input.value = value;
-    input.addEventListener('change', () => {
-      void onPersist(input.value.trim());
+    input.addEventListener('input', () => {
+      draftValue = input.value;
+    });
+    input.addEventListener('blur', () => {
+      const nextValue = draftValue.trim();
+      if (nextValue === committedValue) {
+        return;
+      }
+
+      input.classList.add('vulndash-input-saving');
+      void (async () => {
+        try {
+          await onPersist(nextValue);
+          committedValue = nextValue;
+          input.value = nextValue;
+          input.classList.add('vulndash-input-saved');
+          window.setTimeout(() => {
+            input.classList.remove('vulndash-input-saved');
+          }, 600);
+        } catch {
+          draftValue = committedValue;
+          input.value = committedValue;
+        } finally {
+          input.classList.remove('vulndash-input-saving');
+        }
+      })();
     });
   }
 

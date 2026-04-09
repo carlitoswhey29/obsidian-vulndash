@@ -5,6 +5,9 @@ import type VulnDashPlugin from '../../plugin';
 export class SbomComponentsModal extends Modal {
   private searchQuery = '';
   private renderId = 0;
+  private components: ResolvedSbomComponent[] = [];
+  private listEl: HTMLDivElement | null = null;
+  private emptyStateEl: HTMLParagraphElement | null = null;
 
   public constructor(
     private readonly plugin: VulnDashPlugin,
@@ -23,6 +26,8 @@ export class SbomComponentsModal extends Modal {
     const activeRenderId = ++this.renderId;
     const { contentEl } = this;
     contentEl.empty();
+    this.listEl = null;
+    this.emptyStateEl = null;
 
     const sbom = this.plugin.getSbomById(this.sbomId);
     if (!sbom) {
@@ -41,6 +46,7 @@ export class SbomComponentsModal extends Modal {
       return;
     }
 
+    this.components = components;
     contentEl.createEl('p', {
       text: `${components.length} runtime component${components.length === 1 ? '' : 's'}. Changes here persist as overrides only.`
     });
@@ -54,22 +60,33 @@ export class SbomComponentsModal extends Modal {
     searchInput.value = this.searchQuery;
     searchInput.addEventListener('input', (event) => {
       this.searchQuery = (event.target as HTMLInputElement).value.trim().toLowerCase();
-      void this.renderAsync();
+      this.renderComponentList();
     });
 
-    const filteredComponents = this.getFilteredComponents(components);
-    if (filteredComponents.length === 0) {
-      contentEl.createEl('p', {
-        text: components.length === 0
-          ? 'This SBOM has no components.'
-          : 'No components match the current search.'
-      });
+    this.emptyStateEl = contentEl.createEl('p');
+    this.listEl = contentEl.createDiv({ cls: 'vulndash-sbom-component-list' });
+    this.renderComponentList();
+  }
+
+  private renderComponentList(): void {
+    if (!this.listEl || !this.emptyStateEl) {
       return;
     }
 
-    const list = contentEl.createDiv({ cls: 'vulndash-sbom-component-list' });
+    this.listEl.empty();
+    const filteredComponents = this.getFilteredComponents(this.components);
+    if (filteredComponents.length === 0) {
+      this.emptyStateEl.setText(this.components.length === 0
+        ? 'This SBOM has no components.'
+        : 'No components match the current search.');
+      this.listEl.style.display = 'none';
+      return;
+    }
+
+    this.emptyStateEl.empty();
+    this.listEl.style.display = '';
     for (const component of filteredComponents) {
-      this.renderComponentEditor(list, component);
+      this.renderComponentEditor(this.listEl, component);
     }
   }
 
@@ -105,11 +122,37 @@ export class SbomComponentsModal extends Modal {
     const nameField = form.createDiv({ cls: 'vulndash-sbom-component-field' });
     nameField.createEl('label', { text: 'Effective filter name' });
     const nameInput = nameField.createEl('input', { attr: { type: 'text' } });
-    nameInput.value = component.editedName ?? component.normalizedName;
-    nameInput.addEventListener('change', () => {
-      void this.persistComponentChange(component, {
-        editedName: nameInput.value.trim() || component.normalizedName
-      });
+    let draftName = component.editedName ?? component.normalizedName;
+    let committedName = draftName;
+    nameInput.value = committedName;
+    nameInput.addEventListener('input', () => {
+      draftName = nameInput.value;
+    });
+    nameInput.addEventListener('blur', () => {
+      const nextName = draftName.trim() || component.normalizedName;
+      if (nextName === committedName) {
+        return;
+      }
+
+      nameInput.classList.add('vulndash-input-saving');
+      void (async () => {
+        try {
+          await this.persistComponentChange(component, {
+            editedName: nextName
+          });
+          committedName = nextName;
+          nameInput.value = nextName;
+          nameInput.classList.add('vulndash-input-saved');
+          window.setTimeout(() => {
+            nameInput.classList.remove('vulndash-input-saved');
+          }, 600);
+        } catch {
+          draftName = committedName;
+          nameInput.value = committedName;
+        } finally {
+          nameInput.classList.remove('vulndash-input-saving');
+        }
+      })();
     });
 
     const excludeField = form.createDiv({ cls: 'vulndash-sbom-component-field' });

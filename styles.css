@@ -265,3 +265,12 @@
   gap: 1rem;
   margin-bottom: 1rem;
 }
+
+.vulndash-input-saving {
+  outline: 1px solid var(--interactive-accent);
+  opacity: 0.9;
+}
+
+.vulndash-input-saved {
+  box-shadow: 0 0 0 1px var(--color-green, var(--interactive-accent));
+}
