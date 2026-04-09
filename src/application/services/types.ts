@@ -56,29 +56,34 @@ export type FeedConfig =
   | GitHubRepoFeedConfig
   | GenericJsonFeedConfig;
 
-export interface ImportedSbomComponent {
-  id: string;
-  name: string;
-  normalizedName: string;
-  version: string;
-  purl: string;
-  cpe: string;
-  bomRef: string;
-  namespace: string;
-  enabled: boolean;
-  excluded: boolean;
+export interface SbomComponentOverride {
+  excluded?: boolean;
+  editedName?: string;
 }
 
 export interface ImportedSbomConfig {
   id: string;
   label: string;
   path: string;
-  namespace: string;
   enabled: boolean;
-  components: ImportedSbomComponent[];
-  lastImportedAt: number | null;
-  lastImportHash: string | null;
-  lastImportError: string | null;
+  lastImportedAt: number;
+  contentHash: string;
+  namespace?: string;
+  componentCount?: number;
+  lastError?: string;
+}
+
+export interface RuntimeSbomComponent {
+  normalizedName: string;
+  originalName: string;
+}
+
+export interface RuntimeSbomState {
+  components: RuntimeSbomComponent[];
+  hash: string;
+  lastError: string | null;
+  lastLoadedAt: number;
+  sourcePath: string;
 }
 
 export interface VulnDashSettings {
@@ -87,7 +92,7 @@ export interface VulnDashSettings {
   keywordFilters: string[];
   manualProductFilters: string[];
   /**
-   * Computed filter output. Manual edits should target `manualProductFilters`.
+   * Computed output only. Manual edits must target `manualProductFilters`.
    */
   productFilters: string[];
   minSeverity: Severity;
@@ -108,8 +113,8 @@ export interface VulnDashSettings {
   autoHighNoteCreationEnabled: boolean;
   autoNoteFolder: string;
   sboms: ImportedSbomConfig[];
+  sbomOverrides: Record<string, SbomComponentOverride>;
   sbomImportMode: 'replace' | 'append';
-  sbomAutoApplyFilters: boolean;
   /**
    * Legacy-only migration field. New logic must rely on `sboms`.
    */
@@ -119,3 +124,14 @@ export interface VulnDashSettings {
   settingsVersion: number;
   feeds: FeedConfig[];
 }
+
+export interface ResolvedSbomComponent {
+  displayName: string;
+  editedName?: string;
+  excluded: boolean;
+  normalizedName: string;
+  originalName: string;
+}
+
+export const buildSbomOverrideKey = (sbomId: string, originalName: string): string =>
+  `${sbomId}::${originalName.trim()}`;

@@ -1,9 +1,10 @@
 import { Modal, Notice } from 'obsidian';
+import type { ResolvedSbomComponent } from '../../application/services/types';
 import type VulnDashPlugin from '../../plugin';
-import type { ImportedSbomComponent } from '../../application/services/types';
 
 export class SbomComponentsModal extends Modal {
   private searchQuery = '';
+  private renderId = 0;
 
   public constructor(
     private readonly plugin: VulnDashPlugin,
@@ -15,10 +16,11 @@ export class SbomComponentsModal extends Modal {
 
   public override onOpen(): void {
     this.modalEl.addClass('vulndash-sbom-components-modal');
-    this.render();
+    void this.renderAsync();
   }
 
-  private render(): void {
+  private async renderAsync(): Promise<void> {
+    const activeRenderId = ++this.renderId;
     const { contentEl } = this;
     contentEl.empty();
 
@@ -28,152 +30,130 @@ export class SbomComponentsModal extends Modal {
       return;
     }
 
+    const components = await this.plugin.getSbomComponents(this.sbomId);
+    if (activeRenderId !== this.renderId) {
+      return;
+    }
+
     contentEl.createEl('h2', { text: `${sbom.label}: Components` });
+    if (!components) {
+      contentEl.createEl('p', { text: sbom.lastError || 'Unable to load components for this SBOM.' });
+      return;
+    }
+
     contentEl.createEl('p', {
-      text: `${sbom.components.length} stored component${sbom.components.length === 1 ? '' : 's'}.`
+      text: `${components.length} runtime component${components.length === 1 ? '' : 's'}. Changes here persist as overrides only.`
     });
 
     const searchInput = contentEl.createEl('input', {
       attr: {
-        placeholder: 'Search components by name, version, namespace, purl, or cpe',
+        placeholder: 'Search by original or effective name',
         type: 'search'
       }
     });
     searchInput.value = this.searchQuery;
     searchInput.addEventListener('input', (event) => {
       this.searchQuery = (event.target as HTMLInputElement).value.trim().toLowerCase();
-      this.render();
+      void this.renderAsync();
     });
 
-    const components = this.getFilteredComponents(sbom.components);
-    if (components.length === 0) {
+    const filteredComponents = this.getFilteredComponents(components);
+    if (filteredComponents.length === 0) {
       contentEl.createEl('p', {
-        text: sbom.components.length === 0
-          ? 'This SBOM has no stored components.'
+        text: components.length === 0
+          ? 'This SBOM has no components.'
           : 'No components match the current search.'
       });
       return;
     }
 
     const list = contentEl.createDiv({ cls: 'vulndash-sbom-component-list' });
-    for (const component of components) {
+    for (const component of filteredComponents) {
       this.renderComponentEditor(list, component);
     }
   }
 
-  private getFilteredComponents(components: ImportedSbomComponent[]): ImportedSbomComponent[] {
+  private getFilteredComponents(components: ResolvedSbomComponent[]): ResolvedSbomComponent[] {
     if (!this.searchQuery) {
       return components;
     }
 
-    return components.filter((component) => {
-      const haystack = [
-        component.name,
-        component.normalizedName,
-        component.version,
-        component.namespace,
-        component.purl,
-        component.cpe,
-        component.bomRef
-      ].join(' ').toLowerCase();
-
-      return haystack.includes(this.searchQuery);
-    });
+    return components.filter((component) => [
+      component.originalName,
+      component.normalizedName,
+      component.displayName
+    ].join(' ').toLowerCase().includes(this.searchQuery));
   }
 
-  private renderComponentEditor(container: HTMLElement, component: ImportedSbomComponent): void {
+  private renderComponentEditor(container: HTMLElement, component: ResolvedSbomComponent): void {
     const details = container.createEl('details', { cls: 'vulndash-sbom-component' });
     const summary = details.createEl('summary');
-    const label = component.normalizedName || component.name || component.id;
-    summary.createSpan({ text: label });
-    if (component.version) {
-      summary.createSpan({ text: ` (${component.version})` });
+    summary.createSpan({ text: component.displayName });
+    if (component.displayName !== component.originalName) {
+      summary.createSpan({ text: ` (${component.originalName})` });
     }
     if (component.excluded) {
       summary.createSpan({ text: ' [excluded]' });
     }
-    if (!component.enabled) {
-      summary.createSpan({ text: ' [disabled]' });
-    }
 
     const form = details.createDiv({ cls: 'vulndash-sbom-component-form' });
-    this.createTextField(form, 'Name', component.name, async (value) => {
-      await this.persistComponentChange(component.id, { name: value || component.name });
-    });
-    this.createTextField(form, 'Normalized Filter Name', component.normalizedName, async (value) => {
-      await this.persistComponentChange(component.id, { normalizedName: value || component.normalizedName });
-    });
-    this.createTextField(form, 'Version', component.version, async (value) => {
-      await this.persistComponentChange(component.id, { version: value });
-    });
-    this.createTextField(form, 'Namespace', component.namespace, async (value) => {
-      await this.persistComponentChange(component.id, { namespace: value });
-    });
-    this.createTextField(form, 'PURL', component.purl, async (value) => {
-      await this.persistComponentChange(component.id, { purl: value });
-    });
-    this.createTextField(form, 'CPE', component.cpe, async (value) => {
-      await this.persistComponentChange(component.id, { cpe: value });
-    });
-    this.createTextField(form, 'BOM Ref', component.bomRef, async (value) => {
-      await this.persistComponentChange(component.id, { bomRef: value });
+    form.createEl('p', {
+      cls: 'vulndash-sbom-component-meta',
+      text: `Original name: ${component.originalName} | Normalized import: ${component.normalizedName}`
     });
 
-    this.createCheckboxField(form, 'Enabled', component.enabled, async (checked) => {
-      await this.persistComponentChange(component.id, { enabled: checked });
+    const nameField = form.createDiv({ cls: 'vulndash-sbom-component-field' });
+    nameField.createEl('label', { text: 'Effective filter name' });
+    const nameInput = nameField.createEl('input', { attr: { type: 'text' } });
+    nameInput.value = component.editedName ?? component.normalizedName;
+    nameInput.addEventListener('change', () => {
+      void this.persistComponentChange(component, {
+        editedName: nameInput.value.trim() || component.normalizedName
+      });
     });
-    this.createCheckboxField(form, 'Excluded from computed filters', component.excluded, async (checked) => {
-      await this.persistComponentChange(component.id, { excluded: checked });
+
+    const excludeField = form.createDiv({ cls: 'vulndash-sbom-component-field' });
+    const excludeLabel = excludeField.createEl('label');
+    const excludeInput = excludeLabel.createEl('input', { attr: { type: 'checkbox' } });
+    excludeInput.checked = component.excluded;
+    excludeLabel.appendText(' Exclude from computed filters');
+    excludeInput.addEventListener('change', () => {
+      void this.persistComponentChange(component, { excluded: excludeInput.checked });
     });
 
     const actions = form.createDiv({ cls: 'vulndash-sbom-component-actions' });
-    const removeButton = actions.createEl('button', { text: 'Remove Component' });
+    const resetButton = actions.createEl('button', { text: 'Reset override' });
+    resetButton.addEventListener('click', () => {
+      void this.persistComponentChange(component, {
+        editedName: '',
+        excluded: false
+      });
+    });
+
+    const removeButton = actions.createEl('button', { text: 'Remove component' });
+    removeButton.addClass('mod-warning');
     removeButton.addEventListener('click', () => {
-      void this.removeComponent(component.id);
+      void this.removeComponent(component);
     });
   }
 
-  private createTextField(
-    container: HTMLElement,
-    label: string,
-    value: string,
-    onPersist: (value: string) => Promise<void>
-  ): void {
-    const wrapper = container.createDiv({ cls: 'vulndash-sbom-component-field' });
-    wrapper.createEl('label', { text: label });
-    const input = wrapper.createEl('input', { attr: { type: 'text' } });
-    input.value = value;
-    input.addEventListener('change', () => {
-      void onPersist(input.value.trim());
+  private async persistComponentChange(
+    component: ResolvedSbomComponent,
+    updates: { editedName?: string; excluded?: boolean }
+  ): Promise<void> {
+    const editedName = updates.editedName?.trim() ?? component.editedName ?? '';
+    await this.plugin.updateSbomComponentOverride(this.sbomId, component.originalName, {
+      editedName: editedName && editedName !== component.normalizedName ? editedName : '',
+      excluded: updates.excluded ?? component.excluded
     });
-  }
-
-  private createCheckboxField(
-    container: HTMLElement,
-    label: string,
-    checked: boolean,
-    onPersist: (checked: boolean) => Promise<void>
-  ): void {
-    const wrapper = container.createDiv({ cls: 'vulndash-sbom-component-field' });
-    const checkboxLabel = wrapper.createEl('label');
-    const input = checkboxLabel.createEl('input', { attr: { type: 'checkbox' } });
-    input.checked = checked;
-    checkboxLabel.appendText(` ${label}`);
-    input.addEventListener('change', () => {
-      void onPersist(input.checked);
-    });
-  }
-
-  private async persistComponentChange(componentId: string, updates: Partial<ImportedSbomComponent>): Promise<void> {
-    await this.plugin.updateSbomComponent(this.sbomId, componentId, updates);
     this.onStateChanged?.();
-    this.render();
+    await this.renderAsync();
   }
 
-  private async removeComponent(componentId: string): Promise<void> {
-    await this.plugin.removeSbomComponent(this.sbomId, componentId);
-    new Notice('SBOM component removed.');
+  private async removeComponent(component: ResolvedSbomComponent): Promise<void> {
+    await this.plugin.removeSbomComponent(this.sbomId, component.originalName);
+    new Notice('SBOM component removed from computed filters.');
     this.onStateChanged?.();
-    this.render();
+    await this.renderAsync();
   }
 }
