@@ -1,22 +1,74 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SbomFilterMergeService } from '../../../src/application/services/SbomFilterMergeService';
-import type { ImportedSbomConfig, VulnDashSettings } from '../../../src/application/services/types';
-import { DEFAULT_SETTINGS, migrateLegacySettings } from '../../../src/plugin';
+import type { ImportedSbomConfig, RuntimeSbomState, VulnDashSettings } from '../../../src/application/services/types';
+import { buildSbomOverrideKey } from '../../../src/application/services/types';
 
 const mergeService = new SbomFilterMergeService();
+const DEFAULT_SETTINGS: VulnDashSettings = {
+  pollingIntervalMs: 60_000,
+  pollOnStartup: true,
+  keywordFilters: [],
+  manualProductFilters: [],
+  productFilters: [],
+  minSeverity: 'MEDIUM',
+  minCvssScore: 4,
+  nvdApiKey: '',
+  githubToken: '',
+  systemNotificationsEnabled: true,
+  desktopAlertsHighOrCritical: false,
+  cacheDurationMs: 60_000,
+  maxResults: 200,
+  defaultSortOrder: 'publishedAt',
+  colorCodedSeverity: true,
+  columnVisibility: {
+    id: true,
+    title: true,
+    source: true,
+    severity: true,
+    cvssScore: true,
+    publishedAt: true
+  },
+  keywordRegexEnabled: false,
+  enableNvdFeed: true,
+  enableGithubFeed: true,
+  autoNoteCreationEnabled: false,
+  autoHighNoteCreationEnabled: false,
+  autoNoteFolder: 'VulnDash Alerts',
+  sboms: [],
+  sbomOverrides: {},
+  sbomImportMode: 'append',
+  sbomPath: '',
+  syncControls: {
+    maxPages: 10,
+    maxItems: 500,
+    retryCount: 3,
+    backoffBaseMs: 1000,
+    overlapWindowMs: 180000,
+    bootstrapLookbackMs: 86400000,
+    debugHttpMetadata: false
+  },
+  sourceSyncCursor: {},
+  settingsVersion: 4,
+  feeds: []
+};
 
 const createSbom = (overrides: Partial<ImportedSbomConfig> = {}): ImportedSbomConfig => ({
+  contentHash: 'hash-1',
+  enabled: true,
   id: 'sbom-1',
   label: 'Primary SBOM',
+  lastImportedAt: 1,
   path: 'reports/sbom.json',
-  namespace: '',
-  enabled: true,
-  components: [],
-  lastImportedAt: null,
-  lastImportHash: null,
-  lastImportError: null,
   ...overrides
+});
+
+const createRuntimeState = (names: Array<{ normalizedName: string; originalName: string }>): RuntimeSbomState => ({
+  components: names,
+  hash: 'hash-1',
+  lastError: null,
+  lastLoadedAt: 1,
+  sourcePath: 'reports/sbom.json'
 });
 
 const createSettings = (overrides: Partial<VulnDashSettings> = {}): VulnDashSettings => ({
@@ -24,123 +76,59 @@ const createSettings = (overrides: Partial<VulnDashSettings> = {}): VulnDashSett
   ...overrides
 });
 
-test('append mode keeps manual filters and adds enabled imported components', () => {
+test('append mode keeps manual filters and adds enabled SBOM components', () => {
   const filters = mergeService.merge(createSettings({
     manualProductFilters: ['Acme Portal'],
     sbomImportMode: 'append',
-    sboms: [
-      createSbom({
-        components: [
-          {
-            id: 'component-1',
-            name: 'platform-api',
-            normalizedName: 'Platform Api',
-            version: '1.0.0',
-            purl: '',
-            cpe: '',
-            bomRef: '',
-            namespace: '',
-            enabled: true,
-            excluded: false
-          },
-          {
-            id: 'component-2',
-            name: 'disabled-component',
-            normalizedName: 'Disabled Component',
-            version: '',
-            purl: '',
-            cpe: '',
-            bomRef: '',
-            namespace: '',
-            enabled: false,
-            excluded: false
-          }
-        ]
-      })
-    ]
-  }));
+    sboms: [createSbom()]
+  }), new Map([
+    ['sbom-1', createRuntimeState([
+      { normalizedName: 'Platform Api', originalName: 'platform-api' },
+      { normalizedName: 'Portal Web', originalName: 'portal-web' }
+    ])]
+  ]));
 
-  assert.deepEqual(filters, ['Acme Portal', 'Platform Api']);
+  assert.deepEqual(filters, ['Acme Portal', 'Platform Api', 'Portal Web']);
 });
 
-test('replace mode ignores manual filters and honors exclusions and disabled SBOMs', () => {
-  const filters = mergeService.merge(createSettings({
+test('replace mode uses SBOM components only and honors exclusions and overrides', () => {
+  const settings = createSettings({
     manualProductFilters: ['Manual Filter'],
     sbomImportMode: 'replace',
-    sboms: [
-      createSbom({
-        enabled: true,
-        components: [{
-          id: 'component-1',
-          name: 'platform-api',
-          normalizedName: 'Platform Api',
-          version: '',
-          purl: '',
-          cpe: '',
-          bomRef: '',
-          namespace: '',
-          enabled: true,
-          excluded: true
-        }]
-      }),
-      createSbom({
-        id: 'sbom-2',
-        enabled: false,
-        components: [{
-          id: 'component-2',
-          name: 'portal-web',
-          normalizedName: 'Portal Web',
-          version: '',
-          purl: '',
-          cpe: '',
-          bomRef: '',
-          namespace: '',
-          enabled: true,
-          excluded: false
-        }]
-      })
-    ]
-  }));
+    sbomOverrides: {
+      [buildSbomOverrideKey('sbom-1', 'platform-api')]: { editedName: 'Platform Control Plane' },
+      [buildSbomOverrideKey('sbom-1', 'portal-web')]: { excluded: true }
+    },
+    sboms: [createSbom()]
+  });
+  const filters = mergeService.merge(settings, new Map([
+    ['sbom-1', createRuntimeState([
+      { normalizedName: 'Platform Api', originalName: 'platform-api' },
+      { normalizedName: 'Portal Web', originalName: 'portal-web' }
+    ])]
+  ]));
 
-  assert.deepEqual(filters, []);
+  assert.deepEqual(filters, ['Platform Control Plane']);
 });
 
-test('auto apply disabled keeps only manual filters', () => {
-  const filters = mergeService.merge(createSettings({
-    manualProductFilters: ['Manual Filter'],
-    sbomAutoApplyFilters: false,
-    sbomImportMode: 'append',
-    sboms: [
-      createSbom({
-        components: [{
-          id: 'component-1',
-          name: 'platform-api',
-          normalizedName: 'Platform Api',
-          version: '',
-          purl: '',
-          cpe: '',
-          bomRef: '',
-          namespace: '',
-          enabled: true,
-          excluded: false
-        }]
-      })
-    ]
-  }));
-
-  assert.deepEqual(filters, ['Manual Filter']);
-});
-
-test('migrates legacy sbomPath into sboms and preserves manual filters separately', () => {
-  const migrated = migrateLegacySettings({
-    productFilters: ['Portal Web', 'Platform Api'],
-    sbomPath: 'reports/sbom.json',
-    settingsVersion: 2
+test('resolved components expose effective names without mutating runtime data', () => {
+  const sbom = createSbom();
+  const runtimeState = createRuntimeState([
+    { normalizedName: 'Platform Api', originalName: 'platform-api' }
+  ]);
+  const resolved = mergeService.getResolvedComponents(sbom, runtimeState, {
+    [buildSbomOverrideKey('sbom-1', 'platform-api')]: {
+      editedName: 'Platform Control Plane',
+      excluded: true
+    }
   });
 
-  assert.deepEqual(migrated.manualProductFilters, ['Portal Web', 'Platform Api']);
-  assert.equal(migrated.productFilters.includes('Portal Web'), true);
-  assert.equal(migrated.sboms.length, 1);
-  assert.equal(migrated.sboms[0]?.path, 'reports/sbom.json');
-  assert.equal(migrated.sbomPath, '');
+  assert.deepEqual(resolved, [{
+    displayName: 'Platform Control Plane',
+    editedName: 'Platform Control Plane',
+    excluded: true,
+    normalizedName: 'Platform Api',
+    originalName: 'platform-api'
+  }]);
+  assert.equal(runtimeState.components[0]?.normalizedName, 'Platform Api');
 });

@@ -1,6 +1,6 @@
 import { normalizePath } from 'obsidian';
 import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
-import type { ImportedSbomComponent, ImportedSbomConfig } from './types';
+import type { ImportedSbomConfig, RuntimeSbomComponent, RuntimeSbomState, VulnDashSettings } from './types';
 
 interface SbomReader {
   exists(path: string): Promise<boolean>;
@@ -8,35 +8,34 @@ interface SbomReader {
 }
 
 interface CycloneDxComponent {
-  'bom-ref'?: unknown;
-  bomRef?: unknown;
-  cpe?: unknown;
-  group?: unknown;
-  name?: unknown;
-  purl?: unknown;
-  version?: unknown;
   components?: CycloneDxComponent[];
+  name?: unknown;
 }
 
 interface CycloneDxDocument {
+  bomFormat?: unknown;
+  components?: CycloneDxComponent[];
   metadata?: {
     component?: CycloneDxComponent;
   };
-  components?: CycloneDxComponent[];
+  specVersion?: unknown;
 }
 
-export interface SbomImportSuccessResult {
+export interface SbomLoadSuccessResult {
+  fromCache: boolean;
+  sbomId: string;
+  state: RuntimeSbomState;
   success: true;
-  sbom: ImportedSbomConfig;
-  importedComponentCount: number;
 }
 
-export interface SbomImportFailureResult {
-  success: false;
+export interface SbomLoadFailureResult {
+  cachedState: RuntimeSbomState | null;
   error: string;
+  sbomId: string;
+  success: false;
 }
 
-export type SbomImportResult = SbomImportSuccessResult | SbomImportFailureResult;
+export type SbomLoadResult = SbomLoadSuccessResult | SbomLoadFailureResult;
 
 export interface SbomFileChangeStatus {
   currentHash: string | null;
@@ -44,45 +43,95 @@ export interface SbomFileChangeStatus {
   status: 'changed' | 'error' | 'missing' | 'not-imported' | 'unchanged';
 }
 
+export interface SbomValidationSuccessResult {
+  componentCount: number;
+  normalizedPath: string;
+  success: true;
+}
+
+export interface SbomValidationFailureResult {
+  error: string;
+  normalizedPath: string;
+  success: false;
+}
+
+export type SbomValidationResult = SbomValidationSuccessResult | SbomValidationFailureResult;
+
 export class SbomImportService {
   private readonly nameNormalizer: ProductNameNormalizer;
   private readonly reader: SbomReader;
+  private readonly runtimeCache = new Map<string, RuntimeSbomState>();
 
   public constructor(reader: SbomReader, nameNormalizer = new ProductNameNormalizer()) {
     this.reader = reader;
     this.nameNormalizer = nameNormalizer;
   }
 
-  public async importSbom(config: ImportedSbomConfig): Promise<SbomImportResult> {
+  public async loadAllSboms(settings: Pick<VulnDashSettings, 'sboms'>): Promise<SbomLoadResult[]> {
+    const enabledSboms = settings.sboms.filter((sbom) => sbom.enabled);
+    return Promise.all(enabledSboms.map((sbom) => this.loadSbom(sbom)));
+  }
+
+  public async loadSbom(config: ImportedSbomConfig, options?: { force?: boolean }): Promise<SbomLoadResult> {
     const normalizedPath = this.normalizeSbomPath(config.path);
+    const cached = this.runtimeCache.get(config.id) ?? null;
+
     if (!normalizedPath) {
-      return { success: false, error: 'SBOM path is required.' };
+      return {
+        cachedState: cached,
+        error: 'SBOM path is required.',
+        sbomId: config.id,
+        success: false
+      };
+    }
+
+    if (!options?.force && cached && cached.sourcePath === normalizedPath) {
+      return {
+        fromCache: true,
+        sbomId: config.id,
+        state: cached,
+        success: true
+      };
     }
 
     try {
       const raw = await this.reader.read(normalizedPath);
       const parsed = this.parseSbom(raw);
-      const hash = await this.hashContent(raw);
-      const components = this.buildImportedComponents(parsed, config);
+      const state: RuntimeSbomState = {
+        components: this.extractComponents(parsed),
+        hash: await this.hashContent(raw),
+        lastError: null,
+        lastLoadedAt: Date.now(),
+        sourcePath: normalizedPath
+      };
 
+      this.runtimeCache.set(config.id, state);
       return {
-        success: true,
-        sbom: {
-          ...config,
-          path: normalizedPath,
-          components,
-          lastImportedAt: Date.now(),
-          lastImportError: null,
-          lastImportHash: hash
-        },
-        importedComponentCount: components.length
+        fromCache: false,
+        sbomId: config.id,
+        state,
+        success: true
       };
     } catch (error) {
       return {
-        success: false,
-        error: this.getErrorMessage(error)
+        cachedState: cached,
+        error: this.getErrorMessage(error),
+        sbomId: config.id,
+        success: false
       };
     }
+  }
+
+  public getRuntimeState(sbomId: string): RuntimeSbomState | null {
+    return this.runtimeCache.get(sbomId) ?? null;
+  }
+
+  public getRuntimeCacheSnapshot(): Map<string, RuntimeSbomState> {
+    return new Map(this.runtimeCache);
+  }
+
+  public invalidateCache(sbomId: string): void {
+    this.runtimeCache.delete(sbomId);
   }
 
   public async getFileChangeStatus(config: ImportedSbomConfig): Promise<SbomFileChangeStatus> {
@@ -107,7 +156,7 @@ export class SbomImportService {
 
       const raw = await this.reader.read(normalizedPath);
       const currentHash = await this.hashContent(raw);
-      if (!config.lastImportHash) {
+      if (!config.contentHash) {
         return {
           currentHash,
           error: null,
@@ -118,13 +167,57 @@ export class SbomImportService {
       return {
         currentHash,
         error: null,
-        status: currentHash === config.lastImportHash ? 'unchanged' : 'changed'
+        status: currentHash === config.contentHash ? 'unchanged' : 'changed'
       };
     } catch (error) {
       return {
         currentHash: null,
         error: this.getErrorMessage(error),
         status: 'error'
+      };
+    }
+  }
+
+  public async validateSbomPath(path: string): Promise<SbomValidationResult> {
+    const normalizedPath = this.normalizeSbomPath(path);
+    if (!normalizedPath) {
+      return {
+        error: 'Choose a JSON SBOM file from your vault.',
+        normalizedPath,
+        success: false
+      };
+    }
+
+    try {
+      const exists = await this.reader.exists(normalizedPath);
+      if (!exists) {
+        return {
+          error: 'The selected SBOM file could not be found in the vault.',
+          normalizedPath,
+          success: false
+        };
+      }
+
+      const raw = await this.reader.read(normalizedPath);
+      const parsed = this.parseSbom(raw);
+      if (!this.looksLikeCycloneDxDocument(parsed)) {
+        return {
+          error: 'The selected file is valid JSON, but it does not look like a CycloneDX SBOM.',
+          normalizedPath,
+          success: false
+        };
+      }
+
+      return {
+        componentCount: this.extractComponents(parsed).length,
+        normalizedPath,
+        success: true
+      };
+    } catch (error) {
+      return {
+        error: this.getErrorMessage(error),
+        normalizedPath,
+        success: false
       };
     }
   }
@@ -138,29 +231,28 @@ export class SbomImportService {
     return parsed as CycloneDxDocument;
   }
 
-  private buildImportedComponents(document: CycloneDxDocument, config: ImportedSbomConfig): ImportedSbomComponent[] {
-    const previousComponents = new Map(
-      config.components.map((component) => [this.buildComponentIdentityKey(component), component] as const)
-    );
-    const deduped = new Map<string, ImportedSbomComponent>();
-    const sourceComponents = this.flattenComponents(document);
+  private extractComponents(document: CycloneDxDocument): RuntimeSbomComponent[] {
+    const deduped = new Map<string, RuntimeSbomComponent>();
 
-    for (const sourceComponent of sourceComponents) {
-      const imported = this.mapImportedComponent(sourceComponent, config, previousComponents, deduped.size);
-      if (!imported) {
+    for (const component of this.flattenComponents(document)) {
+      const originalName = this.getString(component.name);
+      if (!originalName) {
         continue;
       }
 
-      const identityKey = this.buildComponentIdentityKey(imported);
-      if (!deduped.has(identityKey)) {
-        deduped.set(identityKey, imported);
+      const normalizedName = this.nameNormalizer.normalize(originalName);
+      const effectiveName = normalizedName || originalName;
+      const key = originalName.toLowerCase();
+      if (!deduped.has(key)) {
+        deduped.set(key, {
+          normalizedName: effectiveName,
+          originalName
+        });
       }
     }
 
     return Array.from(deduped.values()).sort((left, right) =>
-      left.normalizedName.localeCompare(right.normalizedName)
-      || left.version.localeCompare(right.version)
-      || left.name.localeCompare(right.name));
+      left.normalizedName.localeCompare(right.normalizedName) || left.originalName.localeCompare(right.originalName));
   }
 
   private flattenComponents(document: CycloneDxDocument): CycloneDxComponent[] {
@@ -188,125 +280,20 @@ export class SbomImportService {
     return flattened;
   }
 
-  private mapImportedComponent(
-    sourceComponent: CycloneDxComponent,
-    config: ImportedSbomConfig,
-    previousComponents: Map<string, ImportedSbomComponent>,
-    index: number
-  ): ImportedSbomComponent | null {
-    const name = this.getString(sourceComponent.name);
-    const version = this.getString(sourceComponent.version);
-    const purl = this.getString(sourceComponent.purl);
-    const cpe = this.getString(sourceComponent.cpe);
-    const bomRef = this.getString(sourceComponent['bom-ref']) || this.getString(sourceComponent.bomRef);
-    const namespace = this.getComponentNamespace(sourceComponent, purl, config.namespace);
-    const normalizedName = this.nameNormalizer.normalize(name || cpe || purl || bomRef);
-    const displayName = name || normalizedName || purl || cpe || bomRef;
-
-    if (!displayName || !normalizedName) {
-      return null;
+  private looksLikeCycloneDxDocument(document: CycloneDxDocument): boolean {
+    if (this.getString(document.bomFormat).toLowerCase() === 'cyclonedx') {
+      return true;
     }
 
-    const importIdentity = this.buildSourceIdentityKey({
-      bomRef,
-      cpe,
-      name: displayName,
-      normalizedName,
-      namespace,
-      purl,
-      version
-    });
-    const previous = previousComponents.get(importIdentity);
-
-    return {
-      id: previous?.id ?? `component-${index + 1}`,
-      name: previous?.name?.trim() || displayName,
-      normalizedName: previous?.normalizedName?.trim() || normalizedName,
-      version,
-      purl,
-      cpe,
-      bomRef,
-      namespace,
-      enabled: previous?.enabled ?? true,
-      excluded: previous?.excluded ?? false
-    };
-  }
-
-  private buildSourceIdentityKey(component: {
-    bomRef: string;
-    cpe: string;
-    name: string;
-    normalizedName: string;
-    namespace: string;
-    purl: string;
-    version: string;
-  }): string {
-    const primaryIdentity = [
-      component.bomRef.toLowerCase(),
-      component.purl.toLowerCase(),
-      component.cpe.toLowerCase()
-    ].filter(Boolean);
-
-    if (primaryIdentity.length > 0) {
-      return [
-        ...primaryIdentity,
-        component.namespace.toLowerCase(),
-        component.version.toLowerCase()
-      ].join('|');
+    if (this.getString(document.specVersion)) {
+      return true;
     }
 
-    return [
-      component.namespace.toLowerCase(),
-      component.normalizedName.toLowerCase(),
-      component.version.toLowerCase()
-    ].join('|');
-  }
-
-  private buildComponentIdentityKey(component: ImportedSbomComponent): string {
-    return this.buildSourceIdentityKey({
-      bomRef: component.bomRef,
-      cpe: component.cpe,
-      name: component.name,
-      normalizedName: component.normalizedName,
-      namespace: component.namespace,
-      purl: component.purl,
-      version: component.version
-    });
-  }
-
-  private getComponentNamespace(component: CycloneDxComponent, purl: string, sbomNamespace: string): string {
-    const explicitNamespace = this.getString(component.group);
-    if (explicitNamespace) {
-      return explicitNamespace;
+    if (Array.isArray(document.components) || document.metadata?.component) {
+      return true;
     }
 
-    const purlNamespace = this.getPurlNamespace(purl);
-    if (purlNamespace) {
-      return purlNamespace;
-    }
-
-    return sbomNamespace.trim();
-  }
-
-  private getPurlNamespace(purl: string): string {
-    if (!purl.startsWith('pkg:')) {
-      return '';
-    }
-
-    const purlWithoutScheme = purl.slice(4);
-    const typeSeparatorIndex = purlWithoutScheme.indexOf('/');
-    if (typeSeparatorIndex === -1) {
-      return '';
-    }
-
-    const pathWithVersion = purlWithoutScheme.slice(typeSeparatorIndex + 1);
-    const path = pathWithVersion.split('@')[0] ?? '';
-    const segments = path.split('/').filter(Boolean);
-    if (segments.length <= 1) {
-      return '';
-    }
-
-    return decodeURIComponent(segments.slice(0, -1).join('/'));
+    return false;
   }
 
   private async hashContent(content: string): Promise<string> {
@@ -330,6 +317,6 @@ export class SbomImportService {
       return error.message.trim();
     }
 
-    return 'Unable to import SBOM.';
+    return 'Unable to load SBOM.';
   }
 }

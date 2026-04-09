@@ -1,9 +1,8 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
-import type { SbomFileChangeStatus } from '../../application/services/SbomImportService';
+import { App, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import type { ColumnVisibility, VulnDashSettings } from '../../application/services/types';
+import { summarizeSbomWorkspace } from '../../application/services/SbomWorkspaceService';
 import VulnDashPlugin, { DEFAULT_SETTINGS } from '../../plugin';
-import { SbomCompareModal } from './SbomCompareModal';
-import { SbomComponentsModal } from './SbomComponentsModal';
+import { SbomManagerModal } from './SbomManagerModal';
 
 const getNvdFeed = (settings: VulnDashSettings) =>
   settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'nvd' }> =>
@@ -13,33 +12,17 @@ const getGitHubAdvisoryFeed = (settings: VulnDashSettings) =>
     feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
 
 export class VulnDashSettingTab extends PluginSettingTab {
-  private renderId = 0;
-
   public constructor(app: App, private readonly plugin: VulnDashPlugin) {
     super(app, plugin);
   }
 
   public display(): void {
-    void this.displayAsync();
-  }
-
-  private async displayAsync(): Promise<void> {
-    const activeRenderId = ++this.renderId;
     const { containerEl } = this;
     containerEl.empty();
 
     const settings = this.plugin.getSettings();
-    const sbomStatuses = new Map(await Promise.all(settings.sboms.map(async (sbom) => (
-      [sbom.id, await this.plugin.getSbomFileChangeStatus(sbom.id)] as const
-    ))));
-
-    if (activeRenderId !== this.renderId) {
-      return;
-    }
-
-    containerEl.empty();
     this.renderGeneralSettings(containerEl, settings);
-    this.renderSbomSettings(containerEl, settings, sbomStatuses);
+    this.renderSbomSettings(containerEl, settings);
     this.renderFeedSettings(containerEl, settings);
   }
 
@@ -53,28 +36,35 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollOnStartup: value });
       }));
 
-    new Setting(containerEl)
-      .setName('Polling interval (seconds)')
-      .addText((text) => text
-        .setPlaceholder('60')
-        .setValue(String(Math.floor(settings.pollingIntervalMs / 1000)))
-        .onChange(async (value) => {
-          const seconds = Number.parseInt(value, 10);
-          if (Number.isNaN(seconds) || seconds < 30) {
-            return;
-          }
+    const pollingIntervalSetting = new Setting(containerEl)
+      .setName('Polling interval (seconds)');
+    this.bindBlurPersistedText(pollingIntervalSetting, {
+      initialValue: String(Math.floor(settings.pollingIntervalMs / 1000)),
+      placeholder: '60',
+      persist: async (value, committedValue) => {
+        const seconds = Number.parseInt(value, 10);
+        if (Number.isNaN(seconds) || seconds < 30) {
+          return committedValue;
+        }
 
-          await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollingIntervalMs: seconds * 1000 });
-        }));
+        await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollingIntervalMs: seconds * 1000 });
+        return String(seconds);
+      }
+    });
 
-    new Setting(containerEl)
-      .setName('Keyword filters (comma-separated)')
-      .addText((text) => text.setValue(settings.keywordFilters.join(',')).onChange(async (value) => {
+    const keywordFiltersSetting = new Setting(containerEl)
+      .setName('Keyword filters (comma-separated)');
+    this.bindBlurPersistedText(keywordFiltersSetting, {
+      initialValue: settings.keywordFilters.join(','),
+      persist: async (value) => {
+        const keywordFilters = value.split(',').map((entry) => entry.trim()).filter(Boolean);
         await this.plugin.updateSettings({
           ...this.plugin.getSettings(),
-          keywordFilters: value.split(',').map((entry) => entry.trim()).filter(Boolean)
+          keywordFilters
         });
-      }));
+        return keywordFilters.join(',');
+      }
+    });
 
     new Setting(containerEl)
       .setName('Treat keywords as regular expressions')
@@ -83,15 +73,20 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({ ...this.plugin.getSettings(), keywordRegexEnabled: value });
       }));
 
-    new Setting(containerEl)
+    const manualFiltersSetting = new Setting(containerEl)
       .setName('Manual product filters (comma-separated)')
-      .setDesc('These filters are never overwritten by SBOM recomputation.')
-      .addText((text) => text.setValue(settings.manualProductFilters.join(',')).onChange(async (value) => {
+      .setDesc('User-owned product filters. SBOM recompute never overwrites this list.');
+    this.bindBlurPersistedText(manualFiltersSetting, {
+      initialValue: settings.manualProductFilters.join(','),
+      persist: async (value) => {
+        const manualProductFilters = value.split(',').map((entry) => entry.trim()).filter(Boolean);
         await this.plugin.updateLocalSettings({
           ...this.plugin.getSettings(),
-          manualProductFilters: value.split(',').map((entry) => entry.trim()).filter(Boolean)
+          manualProductFilters
         });
-      }));
+        return manualProductFilters.join(',');
+      }
+    });
 
     containerEl.createEl('p', {
       text: settings.productFilters.length === 0
@@ -99,16 +94,20 @@ export class VulnDashSettingTab extends PluginSettingTab {
         : `Computed product filters (${settings.productFilters.length}): ${settings.productFilters.slice(0, 12).join(', ')}${settings.productFilters.length > 12 ? ' ...' : ''}`
     });
 
-    new Setting(containerEl)
-      .setName('Minimum CVSS score')
-      .addText((text) => text.setValue(String(settings.minCvssScore)).onChange(async (value) => {
+    const minCvssSetting = new Setting(containerEl)
+      .setName('Minimum CVSS score');
+    this.bindBlurPersistedText(minCvssSetting, {
+      initialValue: String(settings.minCvssScore),
+      persist: async (value, committedValue) => {
         const score = Number.parseFloat(value);
         if (Number.isNaN(score) || score < 0 || score > 10) {
-          return;
+          return committedValue;
         }
 
         await this.plugin.updateSettings({ ...this.plugin.getSettings(), minCvssScore: score });
-      }));
+        return String(score);
+      }
+    });
 
     new Setting(containerEl)
       .setName('Minimum severity')
@@ -142,29 +141,37 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
     containerEl.createEl('h3', { text: 'Data Persistence & Performance' });
 
-    new Setting(containerEl)
+    const cacheDurationSetting = new Setting(containerEl)
       .setName('Cache duration (seconds)')
-      .setDesc('How long fetched vulnerability data remains in memory before refresh.')
-      .addText((text) => text.setValue(String(Math.floor(settings.cacheDurationMs / 1000))).onChange(async (value) => {
+      .setDesc('How long fetched vulnerability data remains in memory before refresh.');
+    this.bindBlurPersistedText(cacheDurationSetting, {
+      initialValue: String(Math.floor(settings.cacheDurationMs / 1000)),
+      persist: async (value, committedValue) => {
         const seconds = Number.parseInt(value, 10);
         if (Number.isNaN(seconds) || seconds < 0) {
-          return;
+          return committedValue;
         }
 
         await this.plugin.updateSettings({ ...this.plugin.getSettings(), cacheDurationMs: seconds * 1000 });
-      }));
+        return String(seconds);
+      }
+    });
 
-    new Setting(containerEl)
+    const maxResultsSetting = new Setting(containerEl)
       .setName('Maximum results shown')
-      .setDesc('Limits how many vulnerabilities are rendered in the dashboard.')
-      .addText((text) => text.setValue(String(settings.maxResults)).onChange(async (value) => {
+      .setDesc('Limits how many vulnerabilities are rendered in the dashboard.');
+    this.bindBlurPersistedText(maxResultsSetting, {
+      initialValue: String(settings.maxResults),
+      persist: async (value, committedValue) => {
         const maxResults = Number.parseInt(value, 10);
         if (Number.isNaN(maxResults) || maxResults < 1) {
-          return;
+          return committedValue;
         }
 
         await this.plugin.updateSettings({ ...this.plugin.getSettings(), maxResults });
-      }));
+        return String(maxResults);
+      }
+    });
 
     containerEl.createEl('h3', { text: 'UI & Dashboard Customization' });
 
@@ -214,105 +221,89 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
     containerEl.createEl('h3', { text: 'Sync Controls' });
 
-    new Setting(containerEl)
-      .setName('Max pages per sync')
-      .addText((text) => text.setValue(String(settings.syncControls.maxPages)).onChange(async (value) => {
-        const maxPages = Number.parseInt(value, 10);
-        if (Number.isNaN(maxPages) || maxPages < 1) {
-          return;
-        }
+    this.renderSyncControl(containerEl, 'Max pages per sync', String(settings.syncControls.maxPages), async (value, committedValue) => {
+      const maxPages = Number.parseInt(value, 10);
+      if (Number.isNaN(maxPages) || maxPages < 1) {
+        return committedValue;
+      }
 
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          syncControls: { ...this.plugin.getSettings().syncControls, maxPages }
-        });
-      }));
+      await this.plugin.updateSettings({
+        ...this.plugin.getSettings(),
+        syncControls: { ...this.plugin.getSettings().syncControls, maxPages }
+      });
+      return String(maxPages);
+    });
+    this.renderSyncControl(containerEl, 'Max items per sync', String(settings.syncControls.maxItems), async (value, committedValue) => {
+      const maxItems = Number.parseInt(value, 10);
+      if (Number.isNaN(maxItems) || maxItems < 1) {
+        return committedValue;
+      }
 
-    new Setting(containerEl)
-      .setName('Max items per sync')
-      .addText((text) => text.setValue(String(settings.syncControls.maxItems)).onChange(async (value) => {
-        const maxItems = Number.parseInt(value, 10);
-        if (Number.isNaN(maxItems) || maxItems < 1) {
-          return;
-        }
+      await this.plugin.updateSettings({
+        ...this.plugin.getSettings(),
+        syncControls: { ...this.plugin.getSettings().syncControls, maxItems }
+      });
+      return String(maxItems);
+    });
+    this.renderSyncControl(containerEl, 'Retry count', String(settings.syncControls.retryCount), async (value, committedValue) => {
+      const retryCount = Number.parseInt(value, 10);
+      if (Number.isNaN(retryCount) || retryCount < 0) {
+        return committedValue;
+      }
 
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          syncControls: { ...this.plugin.getSettings().syncControls, maxItems }
-        });
-      }));
+      await this.plugin.updateSettings({
+        ...this.plugin.getSettings(),
+        syncControls: { ...this.plugin.getSettings().syncControls, retryCount }
+      });
+      return String(retryCount);
+    });
+    this.renderSyncControl(containerEl, 'Backoff base (ms)', String(settings.syncControls.backoffBaseMs), async (value, committedValue) => {
+      const backoffBaseMs = Number.parseInt(value, 10);
+      if (Number.isNaN(backoffBaseMs) || backoffBaseMs < 100) {
+        return committedValue;
+      }
 
-    new Setting(containerEl)
-      .setName('Retry count')
-      .addText((text) => text.setValue(String(settings.syncControls.retryCount)).onChange(async (value) => {
-        const retryCount = Number.parseInt(value, 10);
-        if (Number.isNaN(retryCount) || retryCount < 0) {
-          return;
-        }
+      await this.plugin.updateSettings({
+        ...this.plugin.getSettings(),
+        syncControls: { ...this.plugin.getSettings().syncControls, backoffBaseMs }
+      });
+      return String(backoffBaseMs);
+    });
+    this.renderSyncControl(containerEl, 'Overlap window (seconds)', String(Math.floor(settings.syncControls.overlapWindowMs / 1000)), async (value, committedValue) => {
+      const seconds = Number.parseInt(value, 10);
+      if (Number.isNaN(seconds) || seconds < 0) {
+        return committedValue;
+      }
 
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          syncControls: { ...this.plugin.getSettings().syncControls, retryCount }
-        });
-      }));
+      await this.plugin.updateSettings({
+        ...this.plugin.getSettings(),
+        syncControls: { ...this.plugin.getSettings().syncControls, overlapWindowMs: seconds * 1000 }
+      });
+      return String(seconds);
+    });
+    this.renderSyncControl(containerEl, 'Bootstrap lookback (hours)', String(Math.floor(settings.syncControls.bootstrapLookbackMs / 3_600_000)), async (value, committedValue) => {
+      const hours = Number.parseInt(value, 10);
+      if (Number.isNaN(hours) || hours < 1) {
+        return committedValue;
+      }
 
-    new Setting(containerEl)
-      .setName('Backoff base (ms)')
-      .addText((text) => text.setValue(String(settings.syncControls.backoffBaseMs)).onChange(async (value) => {
-        const backoffBaseMs = Number.parseInt(value, 10);
-        if (Number.isNaN(backoffBaseMs) || backoffBaseMs < 100) {
-          return;
-        }
-
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          syncControls: { ...this.plugin.getSettings().syncControls, backoffBaseMs }
-        });
-      }));
-
-    new Setting(containerEl)
-      .setName('Overlap window (seconds)')
-      .addText((text) => text.setValue(String(Math.floor(settings.syncControls.overlapWindowMs / 1000))).onChange(async (value) => {
-        const seconds = Number.parseInt(value, 10);
-        if (Number.isNaN(seconds) || seconds < 0) {
-          return;
-        }
-
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          syncControls: { ...this.plugin.getSettings().syncControls, overlapWindowMs: seconds * 1000 }
-        });
-      }));
-
-    new Setting(containerEl)
-      .setName('Bootstrap lookback (hours)')
-      .setDesc('Used when no prior source cursor exists.')
-      .addText((text) => text.setValue(String(Math.floor(settings.syncControls.bootstrapLookbackMs / 3_600_000))).onChange(async (value) => {
-        const hours = Number.parseInt(value, 10);
-        if (Number.isNaN(hours) || hours < 1) {
-          return;
-        }
-
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          syncControls: { ...this.plugin.getSettings().syncControls, bootstrapLookbackMs: hours * 3_600_000 }
-        });
-      }));
+      await this.plugin.updateSettings({
+        ...this.plugin.getSettings(),
+        syncControls: { ...this.plugin.getSettings().syncControls, bootstrapLookbackMs: hours * 3_600_000 }
+      });
+      return String(hours);
+    });
   }
 
-  private renderSbomSettings(
-    containerEl: HTMLElement,
-    settings: VulnDashSettings,
-    sbomStatuses: Map<string, SbomFileChangeStatus>
-  ): void {
-    containerEl.createEl('h3', { text: 'SBOM Filter Management' });
+  private renderSbomSettings(containerEl: HTMLElement, settings: VulnDashSettings): void {
+    containerEl.createEl('h3', { text: 'SBOM Management' });
 
     new Setting(containerEl)
       .setName('SBOM import mode')
-      .setDesc('Replace uses imported filters only. Append keeps manual filters and imported filters together.')
+      .setDesc('Replace uses SBOM-derived filters only. Append keeps manual filters and SBOM-derived filters together.')
       .addDropdown((dropdown) => {
         dropdown
-          .addOptions({ append: 'Append manual + imported', replace: 'Replace with imported only' })
+          .addOptions({ append: 'Append manual + SBOM', replace: 'Replace with SBOM only' })
           .setValue(settings.sbomImportMode)
           .onChange(async (value) => {
             await this.plugin.updateLocalSettings({
@@ -323,109 +314,16 @@ export class VulnDashSettingTab extends PluginSettingTab {
           });
       });
 
-    new Setting(containerEl)
-      .setName('Automatically apply imported SBOM filters')
-      .setDesc('When disabled, imported SBOM components stay stored but do not affect computed product filters.')
-      .addToggle((toggle) => toggle.setValue(settings.sbomAutoApplyFilters).onChange(async (value) => {
-        await this.plugin.updateLocalSettings({
-          ...this.plugin.getSettings(),
-          sbomAutoApplyFilters: value
-        });
-        this.display();
-      }));
-
-    new Setting(containerEl)
-      .setName('SBOM actions')
-      .setDesc('Create SBOM entries and sync imported component inventories.')
+    const summarySetting = new Setting(containerEl)
+      .setName('SBOM workspace')
+      .setDesc(this.formatSbomSummaryText(summarizeSbomWorkspace(settings.sboms)))
       .addButton((button) => {
-        button.setButtonText('Add SBOM').onClick(() => {
-          void (async () => {
-            await this.plugin.addSbom();
-            this.display();
-          })();
-        });
-      })
-      .addButton((button) => {
-        button.setButtonText('Sync All').onClick(() => {
-          void (async () => {
-            const result = await this.plugin.syncAllSboms();
-            new Notice(`SBOM sync complete. ${result.succeeded}/${result.total} succeeded, ${result.failed} failed.`);
-            this.display();
-          })();
+        button.setCta().setButtonText('Manage SBOMs').onClick(() => {
+          new SbomManagerModal(this.plugin, () => this.display()).open();
         });
       });
 
-    if (settings.sboms.length === 0) {
-      containerEl.createEl('p', { text: 'No SBOM entries configured yet.' });
-      return;
-    }
-
-    for (const sbom of settings.sboms) {
-      const sbomContainer = containerEl.createDiv({ cls: 'vulndash-sbom-entry' });
-      const status = sbomStatuses.get(sbom.id);
-
-      new Setting(sbomContainer)
-        .setName(sbom.label || 'Unnamed SBOM')
-        .setDesc(this.describeSbom(sbom, status))
-        .addToggle((toggle) => toggle.setValue(sbom.enabled).onChange(async (value) => {
-          await this.plugin.updateSbomConfig(sbom.id, { enabled: value });
-          this.display();
-        }))
-        .addButton((button) => {
-          button.setButtonText('Sync').onClick(() => {
-            void (async () => {
-              const result = await this.plugin.syncSbom(sbom.id);
-              new Notice(result.message);
-              this.display();
-            })();
-          });
-        })
-        .addButton((button) => {
-          button.setButtonText('Components').onClick(() => {
-            new SbomComponentsModal(this.plugin, sbom.id, () => this.display()).open();
-          });
-        })
-        .addButton((button) => {
-          button.setButtonText('Compare').setDisabled(settings.sboms.length < 2).onClick(() => {
-            new SbomCompareModal(this.plugin, sbom.id).open();
-          });
-        })
-        .addButton((button) => {
-          button.setWarning().setButtonText('Remove').onClick(() => {
-            void (async () => {
-              await this.plugin.removeSbom(sbom.id);
-              new Notice(`Removed ${sbom.label}.`);
-              this.display();
-            })();
-          });
-        });
-
-      new Setting(sbomContainer)
-        .setName('Label')
-        .addText((text) => text.setPlaceholder('Production SBOM').setValue(sbom.label).onChange(async (value) => {
-          await this.plugin.updateSbomConfig(sbom.id, { label: value.trim() || sbom.label });
-        }));
-
-      new Setting(sbomContainer)
-        .setName('Path')
-        .setDesc('Vault-relative path to the CycloneDX JSON file.')
-        .addText((text) => text.setPlaceholder('reports/sbom.json').setValue(sbom.path).onChange(async (value) => {
-          await this.plugin.updateSbomConfig(sbom.id, { path: value.trim() });
-        }));
-
-      new Setting(sbomContainer)
-        .setName('Namespace')
-        .setDesc('Stored as metadata only. It is not prefixed onto computed filters.')
-        .addText((text) => text.setPlaceholder('team/platform').setValue(sbom.namespace).onChange(async (value) => {
-          await this.plugin.updateSbomConfig(sbom.id, { namespace: value.trim() });
-        }));
-
-      if (sbom.lastImportError) {
-        const errorBlock = sbomContainer.createDiv({ cls: 'vulndash-sbom-error' });
-        errorBlock.createEl('strong', { text: 'Last import error: ' });
-        errorBlock.appendText(sbom.lastImportError);
-      }
-    }
+    void this.refreshSbomSummary(summarySetting);
   }
 
   private renderFeedSettings(containerEl: HTMLElement, settings: VulnDashSettings): void {
@@ -469,86 +367,142 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({ ...this.plugin.getSettings(), autoHighNoteCreationEnabled: value });
       }));
 
-    new Setting(containerEl)
-      .setName('Auto-note folder')
-      .addText((text) => text.setValue(settings.autoNoteFolder).onChange(async (value) => {
+    const autoNoteFolderSetting = new Setting(containerEl)
+      .setName('Auto-note folder');
+    this.bindBlurPersistedText(autoNoteFolderSetting, {
+      initialValue: settings.autoNoteFolder,
+      persist: async (value) => {
         const folder = value.trim();
+        const nextFolder = folder.length > 0 ? folder : DEFAULT_SETTINGS.autoNoteFolder;
         await this.plugin.updateSettings({
           ...this.plugin.getSettings(),
-          autoNoteFolder: folder.length > 0 ? folder : DEFAULT_SETTINGS.autoNoteFolder
+          autoNoteFolder: nextFolder
         });
-      }));
+        return nextFolder;
+      }
+    });
 
-    new Setting(containerEl)
+    const nvdKeySetting = new Setting(containerEl)
       .setName('NVD API key')
-      .setDesc('Optional. Key is stored in plugin data; avoid sharing vault config.')
-      .addText((text) => {
-        text.inputEl.type = 'password';
-        text.setValue(getNvdFeed(settings)?.apiKey ?? settings.nvdApiKey).onChange(async (value) => {
-          const nextKey = value.trim();
-          const current = this.plugin.getSettings();
-          await this.plugin.updateSettings({
-            ...current,
-            nvdApiKey: nextKey,
-            feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
-              ? { ...feed, apiKey: nextKey }
-              : feed))
-          });
+      .setDesc('Optional. Key is stored in plugin data; avoid sharing vault config.');
+    this.bindBlurPersistedText(nvdKeySetting, {
+      initialValue: getNvdFeed(settings)?.apiKey ?? settings.nvdApiKey,
+      inputType: 'password',
+      persist: async (value) => {
+        const nextKey = value.trim();
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          nvdApiKey: nextKey,
+          feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+            ? { ...feed, apiKey: nextKey }
+            : feed))
         });
-      });
+        return nextKey;
+      }
+    });
 
-    new Setting(containerEl)
+    const githubTokenSetting = new Setting(containerEl)
       .setName('GitHub token')
-      .setDesc('Optional fine-grained token for higher API limits. Never logged by plugin.')
-      .addText((text) => {
-        text.inputEl.type = 'password';
-        text.setValue(getGitHubAdvisoryFeed(settings)?.token ?? settings.githubToken).onChange(async (value) => {
-          const nextToken = value.trim();
-          const current = this.plugin.getSettings();
-          await this.plugin.updateSettings({
-            ...current,
-            githubToken: nextToken,
-            feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default'
-              ? { ...feed, token: nextToken }
-              : feed))
-          });
+      .setDesc('Optional fine-grained token for higher API limits. Never logged by plugin.');
+    this.bindBlurPersistedText(githubTokenSetting, {
+      initialValue: getGitHubAdvisoryFeed(settings)?.token ?? settings.githubToken,
+      inputType: 'password',
+      persist: async (value) => {
+        const nextToken = value.trim();
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          githubToken: nextToken,
+          feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default'
+            ? { ...feed, token: nextToken }
+            : feed))
+        });
+        return nextToken;
+      }
+    });
+  }
+
+  private renderSyncControl(
+    containerEl: HTMLElement,
+    name: string,
+    value: string,
+    persist: (value: string, committedValue: string) => Promise<string>
+  ): void {
+    const setting = new Setting(containerEl).setName(name);
+    this.bindBlurPersistedText(setting, {
+      initialValue: value,
+      persist
+    });
+  }
+
+  private bindBlurPersistedText(
+    setting: Setting,
+    options: {
+      initialValue: string;
+      inputType?: string;
+      persist: (value: string, committedValue: string) => Promise<string>;
+      placeholder?: string;
+    }
+  ): void {
+    let draftValue = options.initialValue;
+    let committedValue = options.initialValue;
+
+    setting.addText((text) => {
+      if (options.placeholder) {
+        text.setPlaceholder(options.placeholder);
+      }
+      if (options.inputType) {
+        text.inputEl.type = options.inputType;
+      }
+
+      text.setValue(options.initialValue);
+      text.onChange((value) => {
+        draftValue = value;
+      });
+      text.inputEl.addEventListener('blur', () => {
+        if (draftValue === committedValue) {
+          return;
+        }
+
+        void this.persistTextValue(text, async () => {
+          const nextValue = await options.persist(draftValue, committedValue);
+          draftValue = nextValue;
+          committedValue = nextValue;
+          if (text.inputEl.value !== nextValue) {
+            text.setValue(nextValue);
+          }
         });
       });
+    });
   }
 
-  private describeSbom(
-    sbom: VulnDashSettings['sboms'][number],
-    status: SbomFileChangeStatus | undefined
-  ): string {
-    const parts = [
-      `Path: ${sbom.path || 'not set'}`,
-      `Namespace: ${sbom.namespace || 'none'}`,
-      `Components: ${sbom.components.length}`,
-      `Last import: ${sbom.lastImportedAt ? new Date(sbom.lastImportedAt).toLocaleString() : 'never'}`,
-      `Hash: ${sbom.lastImportHash ? sbom.lastImportHash.slice(0, 12) : 'none'}`,
-      `File status: ${this.describeFileStatus(status)}`
-    ];
-
-    return parts.join(' | ');
+  private async persistTextValue(text: TextComponent, save: () => Promise<void>): Promise<void> {
+    text.inputEl.classList.add('vulndash-input-saving');
+    try {
+      await save();
+      text.inputEl.classList.add('vulndash-input-saved');
+      window.setTimeout(() => {
+        text.inputEl.classList.remove('vulndash-input-saved');
+      }, 600);
+    } finally {
+      text.inputEl.classList.remove('vulndash-input-saving');
+    }
   }
 
-  private describeFileStatus(status: SbomFileChangeStatus | undefined): string {
-    if (!status) {
-      return 'checking';
-    }
+  private async refreshSbomSummary(setting: Setting): Promise<void> {
+    const statuses = await this.plugin.getSbomFileStatuses();
+    const summary = summarizeSbomWorkspace(this.plugin.getSettings().sboms, statuses);
+    setting.setDesc(this.formatSbomSummaryText(summary));
+  }
 
-    switch (status.status) {
-      case 'changed':
-        return 'changed since last import';
-      case 'missing':
-        return 'missing';
-      case 'not-imported':
-        return 'not imported yet';
-      case 'unchanged':
-        return 'unchanged';
-      case 'error':
-      default:
-        return status.error ?? 'error';
-    }
+  private formatSbomSummaryText(summary: ReturnType<typeof summarizeSbomWorkspace>): string {
+    return [
+      `${summary.configured} configured`,
+      `${summary.enabled} enabled`,
+      `${summary.withErrors} with errors`,
+      `${summary.changed} changed since last sync`,
+      'Runtime component data stays in memory, not plugin settings.'
+    ].join(' • ');
   }
 }

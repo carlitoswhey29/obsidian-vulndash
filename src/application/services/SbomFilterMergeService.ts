@@ -1,34 +1,54 @@
-import type { ImportedSbomComponent, ImportedSbomConfig, VulnDashSettings } from './types';
+import type {
+  ImportedSbomConfig,
+  ResolvedSbomComponent,
+  RuntimeSbomState,
+  SbomComponentOverride,
+  VulnDashSettings
+} from './types';
+import { buildSbomOverrideKey } from './types';
 
-type SbomFilterSettings = Pick<VulnDashSettings, 'manualProductFilters' | 'sbomAutoApplyFilters' | 'sbomImportMode' | 'sboms'>;
+type SbomFilterSettings = Pick<VulnDashSettings, 'manualProductFilters' | 'sbomImportMode' | 'sbomOverrides' | 'sboms'>;
 
 export class SbomFilterMergeService {
-  public merge(settings: SbomFilterSettings): string[] {
+  public merge(settings: SbomFilterSettings, runtimeCache: Map<string, RuntimeSbomState>): string[] {
     const manualFilters = this.normalizeFilters(settings.manualProductFilters);
-    if (!settings.sbomAutoApplyFilters) {
-      return manualFilters;
-    }
+    const sbomFilters = this.normalizeFilters(settings.sboms.flatMap((sbom) => {
+      const runtimeState = runtimeCache.get(sbom.id) ?? null;
+      return this.getResolvedComponents(sbom, runtimeState, settings.sbomOverrides)
+        .filter((component) => !component.excluded)
+        .map((component) => component.displayName);
+    }));
 
-    const importedFilters = this.normalizeFilters(settings.sboms.flatMap((sbom) => this.getSbomFilters(sbom)));
     if (settings.sbomImportMode === 'replace') {
-      return importedFilters;
+      return sbomFilters;
     }
 
-    return this.normalizeFilters([...manualFilters, ...importedFilters]);
+    return this.normalizeFilters([...manualFilters, ...sbomFilters]);
   }
 
-  private getSbomFilters(sbom: ImportedSbomConfig): string[] {
-    if (!sbom.enabled) {
+  public getResolvedComponents(
+    sbom: ImportedSbomConfig,
+    runtimeState: RuntimeSbomState | null,
+    overrides: Record<string, SbomComponentOverride>
+  ): ResolvedSbomComponent[] {
+    if (!runtimeState) {
       return [];
     }
 
-    return sbom.components
-      .filter((component) => component.enabled && !component.excluded)
-      .map((component) => this.getComponentFilterName(component));
-  }
+    return runtimeState.components.map((component) => {
+      const override = overrides[buildSbomOverrideKey(sbom.id, component.originalName)];
+      const editedName = override?.editedName?.trim() ?? '';
+      const displayName = editedName || component.normalizedName.trim() || component.originalName.trim();
 
-  private getComponentFilterName(component: ImportedSbomComponent): string {
-    return component.normalizedName.trim() || component.name.trim();
+      return {
+        displayName,
+        ...(editedName ? { editedName } : {}),
+        excluded: override?.excluded ?? false,
+        normalizedName: component.normalizedName.trim() || component.originalName.trim(),
+        originalName: component.originalName
+      };
+    }).sort((left, right) =>
+      left.displayName.localeCompare(right.displayName) || left.originalName.localeCompare(right.originalName));
   }
 
   private normalizeFilters(filters: string[]): string[] {

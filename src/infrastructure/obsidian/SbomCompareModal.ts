@@ -1,123 +1,174 @@
 import { Modal } from 'obsidian';
-import type { SbomComparisonGroup, SbomComparisonResult } from '../../application/services/SbomComparisonService';
+import type { SbomComparisonResult } from '../../application/services/SbomComparisonService';
+import { filterSbomComparisonResult } from '../../application/services/SbomWorkspaceService';
 import type VulnDashPlugin from '../../plugin';
 
 export class SbomCompareModal extends Modal {
+  private leftSbomId = '';
   private rightSbomId = '';
+  private searchQuery = '';
+  private comparison: SbomComparisonResult | null = null;
+  private resultsEl: HTMLDivElement | null = null;
 
   public constructor(
     private readonly plugin: VulnDashPlugin,
-    private readonly leftSbomId: string
+    initialSbomId?: string
   ) {
     super(plugin.app);
-    const candidates = this.getComparisonCandidates();
-    this.rightSbomId = candidates[0]?.id ?? '';
+    const sboms = this.plugin.getSettings().sboms;
+    this.leftSbomId = initialSbomId ?? sboms[0]?.id ?? '';
+    this.rightSbomId = sboms.find((sbom) => sbom.id !== this.leftSbomId)?.id ?? sboms[1]?.id ?? '';
   }
 
   public override onOpen(): void {
     this.modalEl.addClass('vulndash-sbom-compare-modal');
-    this.render();
+    void this.renderAsync();
   }
 
-  private render(): void {
+  private async renderAsync(): Promise<void> {
     const { contentEl } = this;
     contentEl.empty();
+    this.resultsEl = null;
 
-    const leftSbom = this.plugin.getSbomById(this.leftSbomId);
-    if (!leftSbom) {
-      contentEl.createEl('p', { text: 'Primary SBOM entry was not found.' });
-      return;
-    }
-
-    contentEl.createEl('h2', { text: `Compare ${leftSbom.label}` });
-    const candidates = this.getComparisonCandidates();
-    if (candidates.length === 0) {
-      contentEl.createEl('p', { text: 'Add at least one more SBOM to compare.' });
-      return;
-    }
-
-    const picker = contentEl.createDiv({ cls: 'vulndash-sbom-compare-picker' });
-    picker.createEl('label', { text: 'Compare against' });
-    const select = picker.createEl('select');
-    for (const candidate of candidates) {
-      const option = select.createEl('option', {
-        text: candidate.label
-      });
-      option.value = candidate.id;
-      option.selected = candidate.id === this.rightSbomId;
-    }
-    select.addEventListener('change', () => {
-      this.rightSbomId = select.value;
-      this.render();
+    const header = contentEl.createDiv({ cls: 'vulndash-modal-header' });
+    header.createEl('h2', { text: 'Compare SBOMs' });
+    header.createEl('p', {
+      cls: 'vulndash-muted-copy',
+      text: 'Review which components are unique to each SBOM and which overlap across both selections.'
     });
 
-    const comparison = this.plugin.compareSboms(this.leftSbomId, this.rightSbomId);
-    if (!comparison) {
-      contentEl.createEl('p', { text: 'Unable to build comparison for the selected SBOMs.' });
+    const sboms = this.plugin.getSettings().sboms;
+    if (sboms.length < 2) {
+      this.renderEmptyState(contentEl, 'Not enough SBOMs to compare', 'Add and configure at least two SBOMs before opening comparison.');
       return;
     }
 
-    const rightSbom = this.plugin.getSbomById(this.rightSbomId);
-    if (!rightSbom) {
-      return;
-    }
-
-    contentEl.createEl('p', {
-      text: [
-        `${leftSbom.label} vs ${rightSbom.label}`,
-        `${comparison.changed.length} changed group${comparison.changed.length === 1 ? '' : 's'}`,
-        `${comparison.leftOnly.length} left-only`,
-        `${comparison.rightOnly.length} right-only`,
-        `${comparison.unchangedCount} unchanged`
-      ].join(' | ')
-    });
-
-    this.renderGroupSection(contentEl, 'Changed', comparison, 'changed');
-    this.renderGroupSection(contentEl, `Only in ${leftSbom.label}`, comparison, 'leftOnly');
-    this.renderGroupSection(contentEl, `Only in ${rightSbom.label}`, comparison, 'rightOnly');
-  }
-
-  private renderGroupSection(
-    container: HTMLElement,
-    heading: string,
-    comparison: SbomComparisonResult,
-    key: 'changed' | 'leftOnly' | 'rightOnly'
-  ): void {
-    const entries = comparison[key];
-    container.createEl('h3', { text: heading });
-    if (entries.length === 0) {
-      container.createEl('p', { text: 'None.' });
-      return;
-    }
-
-    const list = container.createEl('ul');
-    if (key === 'changed') {
-      for (const change of comparison.changed) {
-        const item = list.createEl('li');
-        item.createEl('strong', { text: change.label });
-        item.createSpan({ text: ` | Fields: ${change.fields.join(', ') || 'unspecified'}` });
-        item.createEl('div', { text: `Left: ${this.summarizeGroup(change.left)}` });
-        item.createEl('div', { text: `Right: ${this.summarizeGroup(change.right)}` });
+    const picker = contentEl.createDiv({ cls: 'vulndash-sbom-compare-toolbar' });
+    this.renderSelect(picker, 'SBOM A', sboms, this.leftSbomId, async (value) => {
+      this.leftSbomId = value;
+      if (this.rightSbomId === value) {
+        this.rightSbomId = sboms.find((sbom) => sbom.id !== value)?.id ?? this.rightSbomId;
       }
+      await this.renderAsync();
+    });
+    this.renderSelect(picker, 'SBOM B', sboms, this.rightSbomId, async (value) => {
+      this.rightSbomId = value;
+      if (this.leftSbomId === value) {
+        this.leftSbomId = sboms.find((sbom) => sbom.id !== value)?.id ?? this.leftSbomId;
+      }
+      await this.renderAsync();
+    });
+
+    const swapButton = picker.createEl('button', { text: 'Swap' });
+    swapButton.addEventListener('click', () => {
+      const nextLeft = this.rightSbomId;
+      this.rightSbomId = this.leftSbomId;
+      this.leftSbomId = nextLeft;
+      void this.renderAsync();
+    });
+
+    const searchInput = contentEl.createEl('input', {
+      attr: {
+        placeholder: 'Filter compared component names',
+        type: 'search'
+      }
+    });
+    searchInput.value = this.searchQuery;
+    searchInput.addEventListener('input', () => {
+      this.searchQuery = searchInput.value;
+      this.renderResults();
+    });
+
+    this.resultsEl = contentEl.createDiv({ cls: 'vulndash-sbom-compare-results' });
+    await this.loadComparison();
+    this.renderResults();
+  }
+
+  private async loadComparison(): Promise<void> {
+    if (!this.leftSbomId || !this.rightSbomId || this.leftSbomId === this.rightSbomId) {
+      this.comparison = null;
       return;
     }
 
-    for (const group of entries as SbomComparisonGroup[]) {
-      const item = list.createEl('li');
-      item.createEl('strong', { text: group.label });
-      item.createSpan({ text: ` | ${this.summarizeGroup(group.components)}` });
+    this.comparison = await this.plugin.compareSboms(this.leftSbomId, this.rightSbomId);
+  }
+
+  private renderResults(): void {
+    if (!this.resultsEl) {
+      return;
+    }
+
+    this.resultsEl.empty();
+    if (!this.leftSbomId || !this.rightSbomId || this.leftSbomId === this.rightSbomId) {
+      this.renderEmptyState(this.resultsEl, 'Choose two different SBOMs', 'Select two distinct SBOM entries to load a comparison.');
+      return;
+    }
+
+    if (!this.comparison) {
+      this.renderEmptyState(this.resultsEl, 'Comparison unavailable', 'One or both SBOMs could not be loaded. Check their file selections and sync state.');
+      return;
+    }
+
+    const leftLabel = this.plugin.getSbomById(this.leftSbomId)?.label ?? 'SBOM A';
+    const rightLabel = this.plugin.getSbomById(this.rightSbomId)?.label ?? 'SBOM B';
+    const filteredComparison = filterSbomComparisonResult(this.comparison, this.searchQuery);
+
+    const summary = this.resultsEl.createDiv({ cls: 'vulndash-sbom-summary-grid' });
+    this.createSummaryStat(summary, `Only in ${leftLabel}`, String(filteredComparison.onlyInA.length));
+    this.createSummaryStat(summary, `Only in ${rightLabel}`, String(filteredComparison.onlyInB.length));
+    this.createSummaryStat(summary, 'In both', String(filteredComparison.inBoth.length));
+
+    const sections = this.resultsEl.createDiv({ cls: 'vulndash-sbom-compare-section-grid' });
+    this.renderListSection(sections, `Only in ${leftLabel}`, filteredComparison.onlyInA, 'Components that appear only in the left-hand SBOM.');
+    this.renderListSection(sections, `Only in ${rightLabel}`, filteredComparison.onlyInB, 'Components that appear only in the right-hand SBOM.');
+    this.renderListSection(sections, 'In both', filteredComparison.inBoth, 'Components shared by both selected SBOMs.');
+  }
+
+  private renderSelect(
+    container: HTMLElement,
+    label: string,
+    sboms: Array<{ id: string; label: string }>,
+    selectedValue: string,
+    onChange: (value: string) => Promise<void>
+  ): void {
+    const field = container.createDiv({ cls: 'vulndash-sbom-compare-select' });
+    field.createEl('label', { text: label });
+    const select = field.createEl('select');
+    for (const sbom of sboms) {
+      const option = select.createEl('option', { text: sbom.label });
+      option.value = sbom.id;
+      option.selected = sbom.id === selectedValue;
+    }
+
+    select.addEventListener('change', () => {
+      void onChange(select.value);
+    });
+  }
+
+  private renderListSection(container: HTMLElement, heading: string, values: string[], helperText: string): void {
+    const section = container.createDiv({ cls: 'vulndash-sbom-compare-section' });
+    section.createEl('h3', { text: `${heading} (${values.length})` });
+    section.createEl('p', { cls: 'vulndash-muted-copy', text: helperText });
+    if (values.length === 0) {
+      section.createEl('p', { text: 'No components in this group.' });
+      return;
+    }
+
+    const list = section.createEl('ul', { cls: 'vulndash-sbom-compare-list' });
+    for (const value of values) {
+      list.createEl('li', { text: value });
     }
   }
 
-  private summarizeGroup(components: Array<{ name: string; normalizedName: string; version: string }>): string {
-    return components
-      .map((component) => `${component.normalizedName || component.name}${component.version ? ` ${component.version}` : ''}`)
-      .join(', ');
+  private createSummaryStat(container: HTMLElement, label: string, value: string): void {
+    const stat = container.createDiv({ cls: 'vulndash-sbom-summary-stat' });
+    stat.createDiv({ cls: 'vulndash-sbom-summary-value', text: value });
+    stat.createDiv({ cls: 'vulndash-sbom-summary-label', text: label });
   }
 
-  private getComparisonCandidates(): Array<{ id: string; label: string }> {
-    return this.plugin.getSettings().sboms
-      .filter((sbom) => sbom.id !== this.leftSbomId)
-      .map((sbom) => ({ id: sbom.id, label: sbom.label }));
+  private renderEmptyState(container: HTMLElement, title: string, body: string): void {
+    const state = container.createDiv({ cls: 'vulndash-empty-state is-compact' });
+    state.createEl('h3', { text: title });
+    state.createEl('p', { text: body });
   }
 }
