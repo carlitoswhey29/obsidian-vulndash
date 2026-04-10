@@ -99,6 +99,24 @@ const buildVersionRange = (match: NvdCpeMatch, version: string): string => {
   return parts.join(', ');
 };
 
+const toSentenceTitle = (description: string, cveId: string): string => {
+  const normalized = sanitizeText(description);
+  if (!normalized || normalized === 'No summary provided') {
+    return cveId || 'Unknown CVE';
+  }
+
+  const firstSentence = normalized.split(/(?<=[.!?])\s+/)[0] ?? normalized;
+  const titleSource = firstSentence.length >= 24 ? firstSentence : normalized;
+  if (titleSource.length <= 120) {
+    return titleSource;
+  }
+
+  const truncated = titleSource.slice(0, 117);
+  const lastSpace = truncated.lastIndexOf(' ');
+  const safeBoundary = lastSpace >= 60 ? lastSpace : truncated.length;
+  return `${truncated.slice(0, safeBoundary).trimEnd()}...`;
+};
+
 export class NvdClient implements VulnerabilityFeed {
   private readonly productNameNormalizer = new ProductNameNormalizer();
 
@@ -270,7 +288,7 @@ export class NvdClient implements VulnerabilityFeed {
     return {
       id: cveId || 'unknown',
       source: this.name,
-      title: sanitizeText(cve.id ?? 'Unknown CVE'),
+      title: toSentenceTitle(description, cveId || 'Unknown CVE'),
       summary: sanitizeMarkdown(description),
       publishedAt,
       updatedAt,

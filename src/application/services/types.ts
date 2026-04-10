@@ -56,10 +56,44 @@ export type FeedConfig =
   | GitHubRepoFeedConfig
   | GenericJsonFeedConfig;
 
+export interface SbomComponentOverride {
+  excluded?: boolean;
+  editedName?: string;
+}
+
+export interface ImportedSbomConfig {
+  id: string;
+  label: string;
+  path: string;
+  enabled: boolean;
+  lastImportedAt: number;
+  contentHash: string;
+  namespace?: string;
+  componentCount?: number;
+  lastError?: string;
+}
+
+export interface RuntimeSbomComponent {
+  normalizedName: string;
+  originalName: string;
+}
+
+export interface RuntimeSbomState {
+  components: RuntimeSbomComponent[];
+  hash: string;
+  lastError: string | null;
+  lastLoadedAt: number;
+  sourcePath: string;
+}
+
 export interface VulnDashSettings {
   pollingIntervalMs: number;
   pollOnStartup: boolean;
   keywordFilters: string[];
+  manualProductFilters: string[];
+  /**
+   * Computed output only. Manual edits must target `manualProductFilters`.
+   */
   productFilters: string[];
   minSeverity: Severity;
   minCvssScore: number;
@@ -76,10 +110,28 @@ export interface VulnDashSettings {
   enableNvdFeed: boolean;
   enableGithubFeed: boolean;
   autoNoteCreationEnabled: boolean;
+  autoHighNoteCreationEnabled: boolean;
   autoNoteFolder: string;
+  sboms: ImportedSbomConfig[];
+  sbomOverrides: Record<string, SbomComponentOverride>;
+  sbomImportMode: 'replace' | 'append';
+  /**
+   * Legacy-only migration field. New logic must rely on `sboms`.
+   */
   sbomPath: string;
   syncControls: SyncControls;
   sourceSyncCursor: Record<string, string>;
   settingsVersion: number;
   feeds: FeedConfig[];
 }
+
+export interface ResolvedSbomComponent {
+  displayName: string;
+  editedName?: string;
+  excluded: boolean;
+  normalizedName: string;
+  originalName: string;
+}
+
+export const buildSbomOverrideKey = (sbomId: string, originalName: string): string =>
+  `${sbomId}::${originalName.trim()}`;

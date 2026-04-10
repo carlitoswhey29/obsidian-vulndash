@@ -218,8 +218,9 @@ export class VulnDashView extends ItemView {
         }
         if (column.key === 'severity') {
           const sev = row.createEl('td', { text: sanitizeText(vuln.severity) });
-          if (this.colorCodedSeverity && vuln.severity === 'CRITICAL') sev.addClass('vulndash-critical');
-          if (this.colorCodedSeverity && vuln.severity === 'HIGH') sev.addClass('vulndash-high');
+          if (this.colorCodedSeverity) {
+            sev.addClass(`vulndash-${vuln.severity.toLowerCase()}`);
+          }
         }
         if (column.key === 'cvssScore') {
           row.createEl('td', { text: vuln.cvssScore.toFixed(1) });
