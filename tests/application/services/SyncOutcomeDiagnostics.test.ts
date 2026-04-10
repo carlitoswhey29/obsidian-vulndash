@@ -10,6 +10,7 @@ import type { SyncResult } from '../../../src/application/services/PollingOrches
 import type { Vulnerability } from '../../../src/domain/entities/Vulnerability';
 
 const makeResult = (result: Partial<SyncResult> & Pick<SyncResult, 'source' | 'success'>): SyncResult => ({
+  feedId: result.feedId ?? result.source.toLowerCase(),
   source: result.source,
   startedAt: result.startedAt ?? '2026-04-08T00:00:00.000Z',
   completedAt: result.completedAt ?? '2026-04-08T00:00:01.000Z',
@@ -20,7 +21,8 @@ const makeResult = (result: Partial<SyncResult> & Pick<SyncResult, 'source' | 's
   pagesFetched: result.pagesFetched ?? 0,
   retriesPerformed: result.retriesPerformed ?? 0,
   warnings: result.warnings ?? [],
-  ...(result.errorSummary ? { errorSummary: result.errorSummary } : {})
+  ...(result.errorSummary ? { errorSummary: result.errorSummary } : {}),
+  ...(result.authFailure ? { authFailure: result.authFailure } : {})
 });
 
 const makeVulnerability = (id: string, source: string): Vulnerability => ({
@@ -47,6 +49,23 @@ test('summarizes sync outcomes and surfaces failing feeds', () => {
   assert.deepEqual(getFailedFeedNames(results), ['GitHub']);
   assert.equal(buildFailureNoticeMessage(results), 'VulnDash sync failed for: GitHub. Check logs for details.');
   assert.equal(summaries[1]?.errorSummary, '403 forbidden');
+});
+
+test('auth failure notice explains expired revoked or permission problem', () => {
+  const results = [
+    makeResult({
+      source: 'GitHub',
+      success: false,
+      errorSummary: 'Authentication failed. Token or API key may be expired, revoked, or invalid.',
+      authFailure: { reason: 'unauthorized' }
+    })
+  ];
+
+  assert.equal(
+    buildFailureNoticeMessage(results),
+    'VulnDash authentication failed for: GitHub. Token or API key may be expired, revoked, invalid, or missing required permissions.'
+  );
+  assert.equal(summarizeSyncResults(results)[0]?.authFailure?.reason, 'unauthorized');
 });
 
 test('mixed success keeps failure notice focused on failed feed', () => {

@@ -1,9 +1,10 @@
-import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
+import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, SecretProvider, VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 import type { FeedSyncControls } from './GitHubAdvisoryClient';
+import { AuthFailureHttpError } from '../../application/ports/HttpRequestError';
 
 type GenericSeverity = 'none' | 'low' | 'medium' | 'high' | 'critical';
 
@@ -40,7 +41,7 @@ export class GenericJsonFeedClient implements VulnerabilityFeed {
     public readonly id: string,
     public readonly name: string,
     private readonly url: string,
-    private readonly token: string,
+    private readonly tokenProvider: SecretProvider,
     private readonly authHeaderName: string,
     private readonly controls: FeedSyncControls
   ) {}
@@ -48,11 +49,17 @@ export class GenericJsonFeedClient implements VulnerabilityFeed {
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
     const warnings: string[] = [];
     const headers: Record<string, string> = {};
-    if (this.token) {
-      headers[this.authHeaderName] = this.token;
+    const token = await this.tokenProvider();
+    if (token) {
+      headers[this.authHeaderName] = token;
     }
 
-    const response = await this.httpClient.getJson<GenericFeedResponse>(this.url, headers, options.signal);
+    let response;
+    try {
+      response = await this.httpClient.getJson<GenericFeedResponse>(this.url, headers, options.signal);
+    } catch (error: unknown) {
+      throw this.decorateGenericError(error);
+    }
     const records = response.data.vulnerabilities ?? [];
     const vulnerabilities = records
       .slice(0, this.controls.maxItems)
@@ -68,6 +75,43 @@ export class GenericJsonFeedClient implements VulnerabilityFeed {
       warnings,
       retriesPerformed: 0
     };
+  }
+
+  public async validateConnection(signal: AbortSignal): Promise<{ ok: boolean; message: string }> {
+    const headers: Record<string, string> = {};
+    const token = await this.tokenProvider();
+    if (token) {
+      headers[this.authHeaderName] = token;
+    }
+
+    try {
+      await this.httpClient.getJson<GenericFeedResponse>(this.url, headers, signal);
+      return { ok: true, message: `${this.name} connection validated.` };
+    } catch (error: unknown) {
+      const decorated = this.decorateGenericError(error);
+      if (decorated instanceof AuthFailureHttpError) {
+        return {
+          ok: false,
+          message: `${this.name} token may be expired, revoked, invalid, or missing permissions.`
+        };
+      }
+      const message = decorated instanceof Error ? decorated.message : 'Unknown validation error';
+      return { ok: false, message };
+    }
+  }
+
+  private decorateGenericError(error: unknown): unknown {
+    if (error instanceof AuthFailureHttpError) {
+      return new AuthFailureHttpError(
+        error.authFailureReason === 'unauthorized'
+          ? 'Generic feed authentication failed (401). Token may be expired, revoked, invalid, or missing.'
+          : 'Generic feed authorization failed (403). Token may be missing required permissions.',
+        error.metadata,
+        error.authFailureReason
+      );
+    }
+
+    return error;
   }
 
   private normalize(record: GenericVulnerabilityRecord): Vulnerability {

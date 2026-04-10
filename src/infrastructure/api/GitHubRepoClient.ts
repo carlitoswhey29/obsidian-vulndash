@@ -1,10 +1,11 @@
-import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
+import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, SecretProvider, VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
 import type { FeedSyncControls } from './GitHubAdvisoryClient';
 import { extractNextLink } from './GitHubAdvisoryClient';
+import { AuthFailureHttpError } from '../../application/ports/HttpRequestError';
 
 type GitHubRepoAdvisoryItem = {
   ghsa_id?: string;
@@ -39,7 +40,7 @@ export class GitHubRepoClient implements VulnerabilityFeed {
     private readonly httpClient: IHttpClient,
     public readonly id: string,
     public readonly name: string,
-    private readonly token: string,
+    private readonly tokenProvider: SecretProvider,
     repoPath: string,
     private readonly controls: FeedSyncControls
   ) {
@@ -50,7 +51,8 @@ export class GitHubRepoClient implements VulnerabilityFeed {
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github+json'
     };
-    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    const token = await this.tokenProvider();
+    if (token) headers.Authorization = `Bearer ${token}`;
 
     const warnings: string[] = [];
     const dedup = new Set<string>();
@@ -69,7 +71,12 @@ export class GitHubRepoClient implements VulnerabilityFeed {
       }
       seenUrls.add(nextUrl);
 
-      const response = await this.httpClient.getJson<GitHubRepoAdvisoryResponse>(nextUrl, headers, options.signal);
+      let response;
+      try {
+        response = await this.httpClient.getJson<GitHubRepoAdvisoryResponse>(nextUrl, headers, options.signal);
+      } catch (error: unknown) {
+        throw this.decorateGitHubRepoError(error);
+      }
       pagesFetched += 1;
 
       const advisories = Array.isArray(response.data) ? response.data : (response.data.items ?? []);
@@ -104,6 +111,44 @@ export class GitHubRepoClient implements VulnerabilityFeed {
       warnings,
       retriesPerformed: 0
     };
+  }
+
+  public async validateConnection(signal: AbortSignal): Promise<{ ok: boolean; message: string }> {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json'
+    };
+    const token = await this.tokenProvider();
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    try {
+      const params = new URLSearchParams({ per_page: '1', affects: this.normalizedRepoPath });
+      await this.httpClient.getJson<GitHubRepoAdvisoryResponse>(`https://api.github.com/advisories?${params.toString()}`, headers, signal);
+      return { ok: true, message: `${this.name} connection validated.` };
+    } catch (error: unknown) {
+      const decorated = this.decorateGitHubRepoError(error);
+      if (decorated instanceof AuthFailureHttpError) {
+        return {
+          ok: false,
+          message: `${this.name} token may be expired, revoked, invalid, or missing repository advisory permissions.`
+        };
+      }
+      const message = decorated instanceof Error ? decorated.message : 'Unknown validation error';
+      return { ok: false, message };
+    }
+  }
+
+  private decorateGitHubRepoError(error: unknown): unknown {
+    if (error instanceof AuthFailureHttpError) {
+      return new AuthFailureHttpError(
+        error.authFailureReason === 'unauthorized'
+          ? 'GitHub repository advisory request unauthorized (401). Token may be expired, revoked, invalid, or missing.'
+          : 'GitHub repository advisory request forbidden (403). Token may be missing required advisory permissions, or anonymous access may be blocked.',
+        error.metadata,
+        error.authFailureReason
+      );
+    }
+
+    return error;
   }
 
   private normalize(advisory: GitHubRepoAdvisoryItem): Vulnerability {

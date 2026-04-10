@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { NvdClient } from '../../../src/infrastructure/api/NvdClient';
 import type { IHttpClient, HttpResponse } from '../../../src/application/ports/IHttpClient';
 
+const secretProvider = (secret: string) => async (): Promise<string> => secret;
+
 test('reuses fixed since/until window across NVD pages and advances via API metadata', async () => {
   const seenUrls: string[] = [];
   const responses: Array<HttpResponse<unknown>> = [
@@ -41,7 +43,7 @@ test('reuses fixed since/until window across NVD pages and advances via API meta
     }
   };
 
-  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 50, maxPages: 5 });
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', secretProvider(''), { maxItems: 50, maxPages: 5 });
   const result = await client.fetchVulnerabilities({
     signal: new AbortController().signal,
     since: '2026-02-01T00:00:00.000Z',
@@ -90,7 +92,7 @@ test('normalizes CPE affected products into readable names', async () => {
     }
   };
 
-  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', secretProvider(''), { maxItems: 10, maxPages: 2 });
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
 
   assert.deepEqual(result.vulnerabilities[0]?.affectedProducts, ['Apache Tomcat 10.1.31', 'Nodejs Node.js']);
@@ -140,7 +142,7 @@ test('normalizes NVD CWE vendor product and version metadata', async () => {
     }
   };
 
-  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', secretProvider(''), { maxItems: 10, maxPages: 2 });
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
   const vulnerability = result.vulnerabilities[0];
 
@@ -221,9 +223,24 @@ test('passes apiKey in the NVD query string instead of request headers', async (
     }
   };
 
-  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', 'secret-key', { maxItems: 10, maxPages: 2 });
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', secretProvider('secret-key'), { maxItems: 10, maxPages: 2 });
   await client.fetchVulnerabilities({ signal: new AbortController().signal });
 
   assert.match(seenUrl, /apiKey=secret-key/);
   assert.deepEqual(seenHeaders, {});
+});
+
+test('NVD auth validation failure does not leak API key', async () => {
+  const secret = 'nvd-secret-key';
+  const httpClient: IHttpClient = {
+    async getJson() {
+      throw new Error('NVD request forbidden (403). API key may be missing required permissions.');
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', secretProvider(secret), { maxItems: 10, maxPages: 2 });
+  const result = await client.validateConnection(new AbortController().signal);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.message.includes(secret), false);
 });

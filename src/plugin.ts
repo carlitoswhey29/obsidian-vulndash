@@ -33,6 +33,7 @@ import { buildVulnerabilityNoteBody } from './infrastructure/obsidian/Vulnerabil
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
 import { VulnDashSettingTab } from './infrastructure/obsidian/VulnDashSettingsTab';
 import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from './infrastructure/utils/crypto';
+import { logger } from './infrastructure/utils/logger';
 
 interface LegacyImportedSbomComponent {
   bomRef?: unknown;
@@ -107,6 +108,12 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
 };
 
 const legacyNameNormalizer = new ProductNameNormalizer();
+
+interface FeedAuthHealth {
+  status: 'unknown' | 'valid' | 'auth_failed' | 'error';
+  checkedAt?: string;
+  message?: string;
+}
 
 const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
 
@@ -378,6 +385,7 @@ export default class VulnDashPlugin extends Plugin {
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private previousVisibleIds = new Set<string>();
+  private authHealthByFeedId: Record<string, FeedAuthHealth> = {};
 
   public override async onload(): Promise<void> {
     await this.loadSettings();
@@ -406,6 +414,14 @@ export default class VulnDashPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: 'vulndash-validate-feed-connections',
+      name: 'Validate feed connections',
+      callback: () => {
+        void this.validateFeedConnections();
+      }
+    });
+
     this.addSettingTab(new VulnDashSettingTab(this.app, this));
 
     if (this.settings.pollOnStartup) {
@@ -431,8 +447,9 @@ export default class VulnDashPlugin extends Plugin {
       const outcome = await orchestrator.pollOnce();
       const syncSummaries = summarizeSyncResults(outcome.results);
       for (const summary of syncSummaries) {
-        console.info('[vulndash.sync.feed_summary]', summary);
+        logger.info('[vulndash.sync.feed_summary]', summary);
       }
+      this.updateAuthHealth(outcome.results);
       const failureNotice = buildFailureNoticeMessage(outcome.results);
       if (failureNotice) {
         new Notice(failureNotice);
@@ -442,7 +459,8 @@ export default class VulnDashPlugin extends Plugin {
       await this.saveSettings();
       this.lastFetchAt = Date.now();
       await this.processData(outcome.vulnerabilities);
-    } catch {
+    } catch (error: unknown) {
+      logger.warn('[vulndash.refresh.failure]', error instanceof Error ? { name: error.name, message: error.message } : { message: 'Unknown refresh error' });
       new Notice('VulnDash refresh failed. Check your network or API tokens.');
     }
   }
@@ -731,9 +749,80 @@ export default class VulnDashPlugin extends Plugin {
   private async processData(vulnerabilities: Vulnerability[]): Promise<void> {
     const filtered = this.alertEngine.filter(vulnerabilities, this.settings);
     const diagnostics = buildVisibilityDiagnostics(vulnerabilities, filtered);
-    console.info('[vulndash.filter.visibility]', diagnostics);
+    logger.info('[vulndash.filter.visibility]', diagnostics);
     this.updateView(filtered);
     await this.notifyOnNewItems(filtered);
+  }
+
+  private async validateFeedConnections(): Promise<void> {
+    const client = new HttpClient();
+    const feeds = buildFeedsFromConfig(
+      this.settings.feeds,
+      client,
+      this.settings.syncControls,
+      async (secret) => this.resolveSecret(secret)
+    );
+    const failures: string[] = [];
+
+    for (const feed of feeds) {
+      const checkedAt = new Date().toISOString();
+      if (!feed.validateConnection) {
+        this.authHealthByFeedId[feed.id] = {
+          status: 'unknown',
+          checkedAt,
+          message: `${feed.name} does not support connection validation.`
+        };
+        continue;
+      }
+
+      const result = await feed.validateConnection(new AbortController().signal);
+      this.authHealthByFeedId[feed.id] = {
+        status: result.ok ? 'valid' : 'error',
+        checkedAt,
+        message: result.message
+      };
+
+      logger.info('[vulndash.feed.validation]', {
+        source: feed.name,
+        feedId: feed.id,
+        ok: result.ok,
+        message: result.message
+      });
+
+      if (!result.ok) {
+        failures.push(feed.name);
+      }
+    }
+
+    if (failures.length > 0) {
+      new Notice(`VulnDash feed validation failed for: ${failures.join(', ')}. Token or API key may be expired, revoked, invalid, or missing required permissions.`);
+      return;
+    }
+
+    new Notice('VulnDash feed connections validated.');
+  }
+
+  private updateAuthHealth(results: Array<{
+    feedId: string;
+    success: boolean;
+    authFailure?: { reason: 'unauthorized' | 'forbidden' };
+  }>): void {
+    const checkedAt = new Date().toISOString();
+    for (const result of results) {
+      this.authHealthByFeedId[result.feedId] = result.authFailure
+        ? {
+          status: 'auth_failed',
+          checkedAt,
+          message: result.authFailure.reason === 'unauthorized'
+            ? 'Authentication failed. Token or API key may be expired, revoked, or invalid.'
+            : 'Authorization failed. Token or API key may be missing required permissions.'
+        }
+        : {
+          status: result.success ? 'valid' : 'error',
+          checkedAt,
+          ...(result.success ? {} : { message: 'Last sync failed.' })
+        };
+    }
   }
 
   private async notifyOnNewItems(vulnerabilities: Vulnerability[]): Promise<void> {
@@ -864,7 +953,12 @@ export default class VulnDashPlugin extends Plugin {
 
   private createOrchestrator(): PollingOrchestrator {
     const client = new HttpClient();
-    const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls);
+    const feeds = buildFeedsFromConfig(
+      this.settings.feeds,
+      client,
+      this.settings.syncControls,
+      async (secret) => this.resolveSecret(secret)
+    );
 
     return new PollingOrchestrator(feeds, this.settings.syncControls, {
       cache: this.cachedVulnerabilities,
@@ -945,12 +1039,9 @@ export default class VulnDashPlugin extends Plugin {
     }));
 
     const migrated = migrateLegacySettings({
-      ...(loadedSettings ?? {}),
-      nvdApiKey: nvdSecret.value,
-      githubToken: githubSecret.value,
-      feeds: loadedFeeds
+      ...(loadedSettings ?? {})
     });
-    this.settings = migrated;
+    this.settings = await this.encryptSettingsSecrets(migrated);
 
     if (nvdSecret.decryptionFailed || githubSecret.decryptionFailed) {
       new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
@@ -962,13 +1053,20 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private async saveSettings(): Promise<void> {
-    const encryptedNvd = await this.serializeSecret(this.settings.nvdApiKey);
-    const encryptedGithub = await this.serializeSecret(this.settings.githubToken);
-    const feeds = await Promise.all(this.settings.feeds.map(async (feed) => {
+    const dataToSave = await this.encryptSettingsSecrets(this.settings);
+    this.settings = dataToSave;
+    await this.saveData(dataToSave);
+  }
+
+  private async encryptSettingsSecrets(settings: VulnDashSettings): Promise<VulnDashSettings> {
+    const encryptedNvd = await this.serializeSecret(settings.nvdApiKey);
+    const encryptedGithub = await this.serializeSecret(settings.githubToken);
+    const feeds = await Promise.all(settings.feeds.map(async (feed) => {
       if (feed.type === 'nvd') {
         return {
           ...feed,
-          apiKey: await this.serializeSecret(feed.apiKey ?? '')
+          apiKey: await this.serializeSecret(feed.apiKey ?? ''),
+          ...(feed.token ? { token: await this.serializeSecret(feed.token) } : {})
         };
       }
       if (feed.token) {
@@ -991,6 +1089,9 @@ export default class VulnDashPlugin extends Plugin {
   private async serializeSecret(secret: string): Promise<string> {
     if (!secret) {
       return '';
+    }
+    if (secret.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+      return secret;
     }
     const encrypted = await encryptSecret(secret);
     if (!encrypted) {

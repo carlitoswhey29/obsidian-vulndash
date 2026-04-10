@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHubAdvisoryClient, extractNextLink } from '../../../src/infrastructure/api/GitHubAdvisoryClient';
 import type { HttpResponse, IHttpClient } from '../../../src/application/ports/IHttpClient';
-import { ClientHttpError, RateLimitHttpError } from '../../../src/application/ports/HttpRequestError';
+import { AuthFailureHttpError, RateLimitHttpError } from '../../../src/application/ports/HttpRequestError';
 import { PollingOrchestrator } from '../../../src/application/services/PollingOrchestrator';
 import type { VulnerabilityFeed } from '../../../src/application/ports/VulnerabilityFeed';
 
@@ -17,6 +17,7 @@ test('extractNextLink returns undefined when next relation is missing', () => {
 });
 
 const controls = { maxPages: 5, maxItems: 100 };
+const secretProvider = (secret: string) => async (): Promise<string> => secret;
 
 test('fetches global GitHub advisories with expected headers and endpoint', async () => {
   const seen: Array<{ url: string; headers: Record<string, string> }> = [];
@@ -39,7 +40,7 @@ test('fetches global GitHub advisories with expected headers and endpoint', asyn
     }
   };
 
-  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', 'token-value', controls);
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider('token-value'), controls);
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
 
   assert.equal(result.vulnerabilities.length, 1);
@@ -87,7 +88,7 @@ test('normalizes GitHub advisory package and identifier metadata', async () => {
     }
   };
 
-  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider(''), controls);
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
   const vulnerability = result.vulnerabilities[0];
 
@@ -115,7 +116,7 @@ test('maps incremental cursor to GitHub updated filter', async () => {
     }
   };
 
-  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider(''), controls);
   await client.fetchVulnerabilities({
     signal: new AbortController().signal,
     since: '2026-02-01T00:00:00.000Z'
@@ -130,7 +131,7 @@ test('handles empty advisory results', async () => {
       return { status: 200, headers: {}, data: [] } as HttpResponse<never>;
     }
   };
-  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider(''), controls);
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
   assert.equal(result.vulnerabilities.length, 0);
   assert.equal(result.pagesFetched, 1);
@@ -162,7 +163,7 @@ test('paginates across link headers and deduplicates advisories', async () => {
     }
   };
 
-  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider(''), controls);
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
   assert.equal(result.pagesFetched, 2);
   assert.deepEqual(result.vulnerabilities.map((item) => item.id), ['GHSA-1', 'GHSA-2']);
@@ -195,7 +196,7 @@ test('continues pagination after a page with zero new unique advisories', async 
     }
   };
 
-  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider(''), controls);
   const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
   assert.equal(result.pagesFetched, 3);
   assert.deepEqual(result.vulnerabilities.map((item) => item.id), ['GHSA-1', 'GHSA-2']);
@@ -205,13 +206,35 @@ test('continues pagination after a page with zero new unique advisories', async 
 test('surfaces clear auth failure message', async () => {
   const httpClient: IHttpClient = {
     async getJson() {
-      throw new ClientHttpError('HTTP 403', { status: 403, url: 'https://api.github.com/advisories' });
+      throw new AuthFailureHttpError('HTTP 403', { status: 403, url: 'https://api.github.com/advisories' }, 'forbidden');
     }
   };
-  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider(''), controls);
   await assert.rejects(
     () => client.fetchVulnerabilities({ signal: new AbortController().signal }),
-    (error: unknown) => error instanceof ClientHttpError && error.message.includes('Configure a GitHub token')
+    (error: unknown) => error instanceof AuthFailureHttpError
+      && error.message.includes('Token may be missing required advisory permissions')
+  );
+});
+
+test('auth failure messages and metadata do not leak token values', async () => {
+  const secret = 'github_pat_abcdefghijklmnopqrstuvwxyz123456';
+  const httpClient: IHttpClient = {
+    async getJson() {
+      throw new AuthFailureHttpError(
+        'Authorization failed while requesting https://api.github.com/advisories?token=[REDACTED]',
+        { status: 401, url: 'https://api.github.com/advisories?token=[REDACTED]' },
+        'unauthorized'
+      );
+    }
+  };
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', secretProvider(secret), controls);
+
+  await assert.rejects(
+    () => client.fetchVulnerabilities({ signal: new AbortController().signal }),
+    (error: unknown) => error instanceof AuthFailureHttpError
+      && !error.message.includes(secret)
+      && !error.metadata.url.includes(secret)
   );
 });
 
