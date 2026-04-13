@@ -1,6 +1,6 @@
 {
   "name": "obsidian-vulndash",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Obsidian vulnerability dashboard plugin",
   "private": true,
   "main": "main.js",
