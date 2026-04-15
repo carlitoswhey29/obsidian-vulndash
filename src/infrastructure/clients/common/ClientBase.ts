@@ -21,6 +21,13 @@ interface LegacyExecuteGetJsonRequest {
   decorateError?: (error: unknown) => unknown;
 }
 
+interface ResilientGetJsonRequest {
+  context: Omit<ClientRequestContext, 'headers' | 'attempt'>;
+  headers: Record<string, string>;
+  signal: AbortSignal;
+  decorateError?: (error: unknown) => unknown;
+}
+
 const DEFAULT_CLIENT_LOGGER = new NoopClientLogger();
 
 const createRetryPolicyFromControls = (controls: FeedSyncControls | undefined): RetryPolicy =>
@@ -72,33 +79,29 @@ export abstract class ClientBase {
     );
   }
 
-  protected async getJsonWithResilience<T>(
-    context: Omit<ClientRequestContext, 'headers' | 'attempt'>,
-    url: string,
-    headers: Record<string, string>,
-    signal: AbortSignal
-  ): Promise<HttpResponse<T>> {
-    const { response } = await this.executeJsonRequest<T>({
-      context,
-      url,
-      headers,
-      signal
+  protected async getJsonWithResilience<T>(request: ResilientGetJsonRequest): Promise<{
+    response: HttpResponse<T>;
+    retriesPerformed: number;
+  }> {
+    return this.executeJsonRequest<T>({
+      context: request.context,
+      url: request.context.url,
+      headers: request.headers,
+      signal: request.signal,
+      ...(request.decorateError ? { decorateError: request.decorateError } : {})
     });
-
-    return response;
   }
 
   protected async executeGetJson<T>(request: LegacyExecuteGetJsonRequest): Promise<{
     response: HttpResponse<T>;
     retriesPerformed: number;
   }> {
-    return this.executeJsonRequest<T>({
+    return this.getJsonWithResilience<T>({
       context: {
         provider: this.defaultProvider ?? 'unknown',
         operation: request.operationName,
         url: request.url
       },
-      url: request.url,
       headers: request.headers,
       signal: request.signal,
       ...(request.decorateError ? { decorateError: request.decorateError } : {})

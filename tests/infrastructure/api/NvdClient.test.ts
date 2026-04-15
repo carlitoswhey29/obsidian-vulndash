@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NvdClient } from '../../../src/infrastructure/clients/nvd/NvdClient';
 import type { IHttpClient, HttpResponse } from '../../../src/application/ports/IHttpClient';
-import { AuthFailureHttpError, ClientHttpError } from '../../../src/application/ports/HttpRequestError';
+import { AuthFailureHttpError, ClientHttpError, ServerHttpError } from '../../../src/application/ports/HttpRequestError';
+import type { ClientLogger } from '../../../src/infrastructure/clients/common/ClientLogger';
 
 test('reuses fixed since/until window across NVD pages and advances via API metadata', async () => {
   const seenUrls: string[] = [];
@@ -342,4 +343,93 @@ test('validateConnection surfaces provider-specific NVD auth guidance', async ()
     () => client.validateConnection(new AbortController().signal),
     (error: unknown) => error instanceof AuthFailureHttpError && error.message.includes('Configure a valid NVD API key')
   );
+});
+
+test('tracks retriesPerformed from the shared retry executor for NVD requests', async () => {
+  let attempts = 0;
+  const httpClient: IHttpClient = {
+    async getJson() {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new ServerHttpError('HTTP 503', {
+          status: 503,
+          url: 'https://services.nvd.nist.gov/rest/json/cves/2.0'
+        });
+      }
+
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          startIndex: 0,
+          resultsPerPage: 1,
+          totalResults: 1,
+          vulnerabilities: [{
+            cve: {
+              id: 'CVE-2026-6000',
+              published: '2026-02-01T00:00:00.000Z',
+              lastModified: '2026-02-01T01:00:00.000Z'
+            }
+          }]
+        }
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', {
+    maxItems: 10,
+    maxPages: 2,
+    retryCount: 1,
+    backoffBaseMs: 1
+  });
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.equal(attempts, 2);
+  assert.equal(result.retriesPerformed, 1);
+  assert.deepEqual(result.vulnerabilities.map((vulnerability) => vulnerability.id), ['CVE-2026-6000']);
+});
+
+test('sanitizes NVD apiKey headers before request logging', async () => {
+  const seenHeaders: Array<Record<string, string>> = [];
+  const logger: ClientLogger = {
+    onRequestStart(context) {
+      seenHeaders.push(context.headers);
+    },
+    onRequestSuccess() {},
+    onRequestRetry() {},
+    onRequestFailure() {}
+  };
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          startIndex: 0,
+          resultsPerPage: 1,
+          totalResults: 1,
+          vulnerabilities: [{
+            cve: {
+              id: 'CVE-2026-7000',
+              published: '2026-02-01T00:00:00.000Z',
+              lastModified: '2026-02-01T01:00:00.000Z'
+            }
+          }]
+        }
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(
+    httpClient,
+    'nvd-default',
+    'NVD',
+    'secret-key',
+    { maxItems: 10, maxPages: 2 },
+    { logger }
+  );
+  await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.equal(seenHeaders.length, 1);
+  assert.deepEqual(seenHeaders[0], { apiKey: '[REDACTED]' });
 });
