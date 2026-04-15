@@ -33,7 +33,7 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "off",
 
       // Avoid regex issues in Obsidian's markdown parsing / sanitization
-      "@/no-control-regex": "off"
+      "no-control-regex": "off"
     }
   },
   {
