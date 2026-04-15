@@ -1,3 +1,5 @@
+import type { NvdDateRange } from './NvdTypes';
+
 export const NVD_BASE_URL = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 export const NVD_RESULTS_PER_PAGE = 100;
 export const NVD_MAX_START_INDEX = 1_000_000;
@@ -29,7 +31,7 @@ export function validateIsoUtcDate(value: string, fieldName: string): string {
 export function validateDateRange(
   since: string | undefined,
   until: string | undefined
-): { since?: string; until?: string } {
+): NvdDateRange {
   const safeSince = since ? validateIsoUtcDate(since, 'lastModStartDate') : undefined;
   const safeUntil = until ? validateIsoUtcDate(until, 'lastModEndDate') : undefined;
 
