@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NvdClient } from '../../../src/infrastructure/clients/nvd/NvdClient';
-import type { IHttpClient, HttpResponse } from '../../../src/application/ports/IHttpClient';
-import { AuthFailureHttpError, ClientHttpError, ServerHttpError } from '../../../src/application/ports/HttpRequestError';
-import type { ClientLogger } from '../../../src/infrastructure/clients/common/ClientLogger';
+import { NvdClient } from '../../../../src/infrastructure/clients/nvd/NvdClient';
+import type { IHttpClient, HttpResponse } from '../../../../src/application/ports/IHttpClient';
+import { AuthFailureHttpError, ClientHttpError, ServerHttpError } from '../../../../src/application/ports/HttpRequestError';
+import type { ClientLogger } from '../../../../src/infrastructure/clients/common/ClientLogger';
 
 test('reuses fixed since/until window across NVD pages and advances via API metadata', async () => {
   const seenUrls: string[] = [];
