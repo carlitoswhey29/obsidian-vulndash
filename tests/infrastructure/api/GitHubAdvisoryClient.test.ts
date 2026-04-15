@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GitHubAdvisoryClient, extractNextLink } from '../../../src/infrastructure/api/GitHubAdvisoryClient';
+import { GitHubAdvisoryClient, extractNextLink } from '../../../src/infrastructure/clients/github/GitHubAdvisoryClient';
 import type { HttpResponse, IHttpClient } from '../../../src/application/ports/IHttpClient';
 import { ClientHttpError, RateLimitHttpError } from '../../../src/application/ports/HttpRequestError';
 import { PollingOrchestrator } from '../../../src/application/services/PollingOrchestrator';

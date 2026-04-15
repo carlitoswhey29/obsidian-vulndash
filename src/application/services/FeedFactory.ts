@@ -1,9 +1,9 @@
 import type { VulnerabilityFeed } from '../ports/VulnerabilityFeed';
 import type { FeedConfig, SyncControls } from './types';
 import type { IHttpClient } from '../ports/IHttpClient';
-import { GitHubAdvisoryClient } from '../../infrastructure/api/GitHubAdvisoryClient';
-import { GitHubRepoClient } from '../../infrastructure/api/GitHubRepoClient';
-import { NvdClient } from '../../infrastructure/api/NvdClient';
+import { GitHubAdvisoryClient } from '../../infrastructure/clients/github/GitHubAdvisoryClient';
+import { GitHubRepoClient } from '../../infrastructure/clients/github/GitHubRepoClient';
+import { NvdClient } from '../../infrastructure/clients/nvd/NvdClient';
 import { GenericJsonFeedClient } from '../../infrastructure/api/GenericJsonFeedClient';
 
 export const buildFeedsFromConfig = (

@@ -1,14 +1,14 @@
-import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
-import type { IHttpClient } from '../../application/ports/IHttpClient';
-import { ClientHttpError } from '../../application/ports/HttpRequestError';
+import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../../application/ports/VulnerabilityFeed';
+import type { IHttpClient } from '../../../application/ports/IHttpClient';
+import { ClientHttpError } from '../../../application/ports/HttpRequestError';
 import type {
   Vulnerability,
   VulnerabilityAffectedPackage,
   VulnerabilityMetadata,
   VulnerabilitySourceUrls
-} from '../../domain/entities/Vulnerability';
-import { classifySeverity } from '../../domain/services/Cvss';
-import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
+} from '../../../domain/entities/Vulnerability';
+import { classifySeverity } from '../../../domain/services/Cvss';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
 
 export interface FeedSyncControls {
   maxPages: number;

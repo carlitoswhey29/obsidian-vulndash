@@ -3,7 +3,7 @@ import type { IHttpClient } from '../../application/ports/IHttpClient';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
-import type { FeedSyncControls } from './GitHubAdvisoryClient';
+import type { FeedSyncControls } from '../clients/github/GitHubAdvisoryClient';
 
 type GenericSeverity = 'none' | 'low' | 'medium' | 'high' | 'critical';
 

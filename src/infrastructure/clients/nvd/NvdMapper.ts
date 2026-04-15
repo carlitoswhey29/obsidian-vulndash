@@ -1,63 +1,18 @@
-import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../application/ports/VulnerabilityFeed';
 import type {
   Vulnerability,
   VulnerabilityAffectedPackage,
   VulnerabilityMetadata,
   VulnerabilitySourceUrls
-} from '../../domain/entities/Vulnerability';
-import { classifySeverity } from '../../domain/services/Cvss';
-import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
-import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
-import type { IHttpClient } from '../../application/ports/IHttpClient';
-import type { FeedSyncControls } from './GitHubAdvisoryClient';
-
-interface NvdCvssMetric {
-  cvssData?: { baseScore?: number };
-}
-
-interface NvdCpeMatch {
-  criteria?: string;
-  vulnerable?: boolean;
-  versionStartIncluding?: string;
-  versionStartExcluding?: string;
-  versionEndIncluding?: string;
-  versionEndExcluding?: string;
-}
-
-interface NvdConfigurationNode {
-  cpeMatch?: NvdCpeMatch[];
-  nodes?: NvdConfigurationNode[];
-}
-
-interface NvdCveRecord {
-  id?: string;
-  published?: string;
-  lastModified?: string;
-  descriptions?: Array<{ lang?: string; value?: string }>;
-  references?: Array<{ url?: string }>;
-  weaknesses?: Array<{ description?: Array<{ lang?: string; value?: string }> }>;
-  metrics?: {
-    cvssMetricV31?: NvdCvssMetric[];
-    cvssMetricV30?: NvdCvssMetric[];
-    cvssMetricV2?: NvdCvssMetric[];
-  };
-  configurations?: Array<{ nodes?: NvdConfigurationNode[] }>;
-}
-
-interface NvdResponse {
-  startIndex?: number;
-  resultsPerPage?: number;
-  totalResults?: number;
-  vulnerabilities?: Array<{
-    cve?: NvdCveRecord;
-  }>;
-}
-
-interface ParsedCpe {
-  vendor: string;
-  product: string;
-  version: string;
-}
+} from '../../../domain/entities/Vulnerability';
+import { classifySeverity } from '../../../domain/services/Cvss';
+import { ProductNameNormalizer } from '../../../domain/services/ProductNameNormalizer';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
+import type {
+  NvdConfigurationNode,
+  NvdCpeMatch,
+  NvdCveRecord,
+  ParsedCpe
+} from './NvdTypes';
 
 const uniqueNonEmpty = (values: string[]): string[] => {
   const seen = new Set<string>();
@@ -116,113 +71,55 @@ const toSentenceTitle = (description: string, cveId: string): string => {
   return `${truncated.slice(0, safeBoundary).trimEnd()}...`;
 };
 
-export class NvdClient implements VulnerabilityFeed {
+export class NvdMapper {
   private readonly productNameNormalizer = new ProductNameNormalizer();
 
-  public constructor(
-    private readonly httpClient: IHttpClient,
-    public readonly id: string,
-    public readonly name: string,
-    private readonly apiKey: string,
-    private readonly controls: FeedSyncControls
-  ) {}
+  public constructor(private readonly sourceName: string) {}
 
-  public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
-    const dedup = new Set<string>();
-    const collected: Vulnerability[] = [];
-    const warnings: string[] = [];
-    const seenIndexes = new Set<number>();
-    let pagesFetched = 0;
-    let startIndex = 0;
-
-    while (pagesFetched < this.controls.maxPages && collected.length < this.controls.maxItems) {
-      if (seenIndexes.has(startIndex)) {
-        warnings.push('duplicate_next_url');
-        break;
-      }
-      seenIndexes.add(startIndex);
-
-      const url = this.buildUrl(options.since, options.until, startIndex);
-      const data = await this.httpClient.getJson<NvdResponse>(url, {}, options.signal);
-      pagesFetched += 1;
-
-      const items = (data.data.vulnerabilities ?? [])
-        .map((item) => item.cve)
-        .filter((cve): cve is NonNullable<typeof cve> => Boolean(cve?.id))
-        .map((cve) => this.normalize(cve));
-
-      for (const item of items) {
-        if (collected.length >= this.controls.maxItems) {
-          warnings.push('max_items_reached');
-          break;
-        }
-        const key = `${item.source}:${item.id}`;
-        if (dedup.has(key)) continue;
-        dedup.add(key);
-        collected.push(item);
-      }
-
-      const nextStartIndex = (data.data.startIndex ?? startIndex) + (data.data.resultsPerPage ?? items.length);
-      if (items.length === 0 || nextStartIndex >= (data.data.totalResults ?? 0)) {
-        break;
-      }
-      startIndex = nextStartIndex;
-    }
-
-    if (pagesFetched >= this.controls.maxPages) warnings.push('max_pages_reached');
-
-    return { vulnerabilities: collected, pagesFetched, warnings, retriesPerformed: 0 };
-  }
-
-  private buildUrl(since: string | undefined, until: string | undefined, startIndex: number): string {
-    const params = new URLSearchParams({
-      resultsPerPage: '100',
-      startIndex: String(startIndex)
-    });
-    if (this.apiKey) {
-      params.set('apiKey', this.apiKey);
-    }
-    if (since) {
-      params.set('lastModStartDate', since);
-    }
-    if (until) {
-      params.set('lastModEndDate', until);
-    }
-    return `https://services.nvd.nist.gov/rest/json/cves/2.0?${params.toString()}`;
-  }
-
-  private normalize(cve: NvdCveRecord): Vulnerability {
+  public normalize(cve: NvdCveRecord): Vulnerability {
     const score = cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore
       ?? cve.metrics?.cvssMetricV30?.[0]?.cvssData?.baseScore
       ?? cve.metrics?.cvssMetricV2?.[0]?.cvssData?.baseScore
       ?? 0;
+
     const description = cve.descriptions?.find((d) => d.lang === 'en')?.value ?? 'No summary provided';
     const refs = (cve.references ?? []).map((r) => sanitizeUrl(r.url ?? '')).filter(Boolean);
+
     const cpeMatches = this.collectCpeMatches(cve.configurations ?? []);
     const affectedProducts = cpeMatches
       .map((match) => this.productNameNormalizer.normalize(sanitizeText(match.criteria ?? '')))
       .filter(Boolean);
+
     const affectedPackages = cpeMatches
       .map((match): VulnerabilityAffectedPackage | null => this.toAffectedPackage(match))
       .filter((affectedPackage): affectedPackage is VulnerabilityAffectedPackage => affectedPackage !== null);
-    const cwes = uniqueNonEmpty((cve.weaknesses ?? [])
-      .flatMap((weakness) => weakness.description ?? [])
-      .filter((descriptionItem) => descriptionItem.lang === 'en')
-      .map((descriptionItem) => sanitizeText(descriptionItem.value ?? ''))
-      .filter((cwe) => /^CWE-\d+$/i.test(cwe)));
+
+    const cwes = uniqueNonEmpty(
+      (cve.weaknesses ?? [])
+        .flatMap((weakness) => weakness.description ?? [])
+        .filter((descriptionItem) => descriptionItem.lang === 'en')
+        .map((descriptionItem) => sanitizeText(descriptionItem.value ?? ''))
+        .filter((cwe) => /^CWE-\d+$/i.test(cwe))
+    );
+
     const vendors = uniqueNonEmpty(affectedPackages.map((affectedPackage) => affectedPackage.vendor ?? ''));
     const packages = uniqueNonEmpty(affectedPackages.map((affectedPackage) => affectedPackage.name));
-    const vulnerableVersionRanges = uniqueNonEmpty(affectedPackages
-      .map((affectedPackage) => affectedPackage.vulnerableVersionRange
-        ? `${affectedPackage.vendor ? `${affectedPackage.vendor} ` : ''}${affectedPackage.name}: ${affectedPackage.vulnerableVersionRange}`
-        : ''));
+    const vulnerableVersionRanges = uniqueNonEmpty(
+      affectedPackages.map((affectedPackage) =>
+        affectedPackage.vulnerableVersionRange
+          ? `${affectedPackage.vendor ? `${affectedPackage.vendor} ` : ''}${affectedPackage.name}: ${affectedPackage.vulnerableVersionRange}`
+          : ''
+      )
+    );
 
     const publishedAt = cve.published ?? new Date(0).toISOString();
     const updatedAt = cve.lastModified ?? publishedAt;
     const cveId = sanitizeText(cve.id ?? '');
     const nvdUrl = cveId ? `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(cveId)}` : '';
+
     const sourceUrls: VulnerabilitySourceUrls = {};
     if (nvdUrl) sourceUrls.html = nvdUrl;
+
     const metadata: VulnerabilityMetadata = {};
     if (cveId) {
       metadata.cveId = cveId;
@@ -237,7 +134,7 @@ export class NvdClient implements VulnerabilityFeed {
 
     return {
       id: cveId || 'unknown',
-      source: this.name,
+      source: this.sourceName,
       title: toSentenceTitle(description, cveId || 'Unknown CVE'),
       summary: sanitizeMarkdown(description),
       publishedAt,

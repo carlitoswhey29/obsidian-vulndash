@@ -1,8 +1,8 @@
-import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
-import type { IHttpClient } from '../../application/ports/IHttpClient';
-import type { Vulnerability } from '../../domain/entities/Vulnerability';
-import { classifySeverity } from '../../domain/services/Cvss';
-import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
+import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
+import type { IHttpClient } from '../../../application/ports/IHttpClient';
+import type { Vulnerability } from '../../../domain/entities/Vulnerability';
+import { classifySeverity } from '../../../domain/services/Cvss';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
 import type { FeedSyncControls } from './GitHubAdvisoryClient';
 import { extractNextLink } from './GitHubAdvisoryClient';
 
@@ -30,6 +30,22 @@ const severityToScore = (severity: string | undefined): number => {
     case 'low': return 2.5;
     default: return 0;
   }
+};
+
+const uniqueNonEmpty = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+
+  return result;
 };
 
 export class GitHubRepoClient implements VulnerabilityFeed {
@@ -123,9 +139,8 @@ export class GitHubRepoClient implements VulnerabilityFeed {
       cvssScore: score,
       severity: classifySeverity(score),
       references: [sanitizeUrl(advisory.html_url ?? '')].filter(Boolean),
-      affectedProducts: (advisory.vulnerabilities ?? [])
-        .map((v) => sanitizeText(v.package?.name ?? ''))
-        .filter(Boolean)
+      affectedProducts: uniqueNonEmpty((advisory.vulnerabilities ?? [])
+        .map((v) => sanitizeText(v.package?.name ?? '')))
     };
   }
 }

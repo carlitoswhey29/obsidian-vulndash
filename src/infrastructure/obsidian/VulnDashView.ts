@@ -149,7 +149,7 @@ export class VulnDashView extends ItemView {
     }
     this.tableContainer?.empty();
 
-    // 2. Table setup: only visible columns are rendered and sortable.
+    // Table setup: only visible columns are rendered and sortable.
     const table = this.tableContainer?.createEl('table', { cls: 'vulndash-table' });
     if (!table) {
       return;
@@ -182,7 +182,7 @@ export class VulnDashView extends ItemView {
 
     const tbody = table.createEl('tbody');
 
-    // 3. Apply local search after sorting to preserve user-selected ordering.
+    // Apply local search after sorting to preserve user-selected ordering.
     let data = this.getSorted().slice(0, this.maxResults);
     if (this.localSearchQuery) {
       data = data.filter(v =>
@@ -192,7 +192,7 @@ export class VulnDashView extends ItemView {
       );
     }
 
-    // 4. Render compact rows with a collapsible details row per vulnerability.
+    // Render compact rows with a collapsible details row per vulnerability.
     for (const vuln of data) {
       // Main Row
       const row = tbody.createEl('tr', { cls: 'vulndash-row-main vulndash-item-boundary' });

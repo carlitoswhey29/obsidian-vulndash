@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NvdClient } from '../../../src/infrastructure/api/NvdClient';
+import { NvdClient } from '../../../src/infrastructure/clients/nvd/NvdClient';
 import type { IHttpClient, HttpResponse } from '../../../src/application/ports/IHttpClient';
 
 test('reuses fixed since/until window across NVD pages and advances via API metadata', async () => {
@@ -192,7 +192,7 @@ test('uses the NVD English description as a descriptive title', async () => {
   );
 });
 
-test('passes apiKey in the NVD query string instead of request headers', async () => {
+test('passes apiKey in NVD request headers instead of the query string', async () => {
   let seenUrl = '';
   let seenHeaders: Record<string, string> | undefined;
 
@@ -224,6 +224,6 @@ test('passes apiKey in the NVD query string instead of request headers', async (
   const client = new NvdClient(httpClient, 'nvd-default', 'NVD', 'secret-key', { maxItems: 10, maxPages: 2 });
   await client.fetchVulnerabilities({ signal: new AbortController().signal });
 
-  assert.match(seenUrl, /apiKey=secret-key/);
-  assert.deepEqual(seenHeaders, {});
+  assert.doesNotMatch(seenUrl, /apiKey=secret-key/);
+  assert.deepEqual(seenHeaders, { apiKey: 'secret-key' });
 });
