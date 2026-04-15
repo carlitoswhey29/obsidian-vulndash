@@ -39,16 +39,26 @@ export abstract class ClientBase {
   protected constructor(httpClient: IHttpClient, logger?: ClientLogger, retryPolicy?: RetryPolicy);
   protected constructor(httpClient: IHttpClient, provider: string, controls: FeedSyncControls, logger?: ClientLogger);
   protected constructor(
+    httpClient: IHttpClient,
+    provider: string,
+    controls: FeedSyncControls,
+    logger?: ClientLogger,
+    retryPolicy?: RetryPolicy
+  );
+  protected constructor(
     protected readonly httpClient: IHttpClient,
     providerOrLogger?: string | ClientLogger,
     controlsOrRetryPolicy?: FeedSyncControls | RetryPolicy,
-    logger?: ClientLogger
+    logger?: ClientLogger,
+    retryPolicy?: RetryPolicy
   ) {
     if (typeof providerOrLogger === 'string') {
       this.defaultProvider = providerOrLogger;
       this.logger = logger ?? DEFAULT_CLIENT_LOGGER;
       this.retryExecutor = new RetryExecutor(
-        createRetryPolicyFromControls(controlsOrRetryPolicy as FeedSyncControls | undefined),
+        retryPolicy
+          ? normalizeRetryPolicy(retryPolicy)
+          : createRetryPolicyFromControls(controlsOrRetryPolicy as FeedSyncControls | undefined),
         this.logger
       );
       return;
