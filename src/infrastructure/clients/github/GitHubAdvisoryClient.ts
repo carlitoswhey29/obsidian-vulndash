@@ -1,6 +1,6 @@
-import type { VulnerabilityFeed, FetchVulnerabilityOptions, FetchVulnerabilityResult } from '../../../application/ports/VulnerabilityFeed';
+import { AuthFailureHttpError, ClientHttpError } from '../../../application/ports/HttpRequestError';
 import type { IHttpClient } from '../../../application/ports/IHttpClient';
-import { ClientHttpError } from '../../../application/ports/HttpRequestError';
+import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
 import type {
   Vulnerability,
   VulnerabilityAffectedPackage,
@@ -9,11 +9,7 @@ import type {
 } from '../../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
-
-export interface FeedSyncControls {
-  maxPages: number;
-  maxItems: number;
-}
+import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
 
 export type GitHubAdvisoryItem = {
   ghsa_id?: string;
@@ -95,14 +91,16 @@ export const extractNextLink = (linkHeader: string | undefined): string | undefi
   return undefined;
 };
 
-export class GitHubAdvisoryClient implements VulnerabilityFeed {
+export class GitHubAdvisoryClient extends ClientBase implements VulnerabilityFeed {
   public constructor(
-    private readonly httpClient: IHttpClient,
+    httpClient: IHttpClient,
     public readonly id: string,
     public readonly name: string,
     private readonly token: string,
     private readonly controls: FeedSyncControls
-  ) {}
+  ) {
+    super(httpClient, name, controls);
+  }
 
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
     const headers: Record<string, string> = {
@@ -117,6 +115,7 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
     const collected: Vulnerability[] = [];
     const seenUrls = new Set<string>();
     let pagesFetched = 0;
+    let retriesPerformed = 0;
     let nextUrl: string | undefined = this.buildInitialUrl(options.since);
 
     while (nextUrl && pagesFetched < this.controls.maxPages && collected.length < this.controls.maxItems) {
@@ -126,21 +125,14 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       }
       seenUrls.add(nextUrl);
 
-      console.info('[vulndash.github.fetch.request]', {
-        source: this.name,
-        feedId: this.id,
-        page: pagesFetched + 1,
+      const { response, retriesPerformed: requestRetries } = await this.executeGetJson<GitHubSecurityResponse>({
+        operationName: 'fetchVulnerabilities',
         url: nextUrl,
-        since: options.since,
-        until: options.until
+        headers,
+        signal: options.signal,
+        decorateError: (error) => this.decorateGitHubError(error)
       });
-
-      let response;
-      try {
-        response = await this.httpClient.getJson<GitHubSecurityResponse>(nextUrl, headers, options.signal);
-      } catch (error: unknown) {
-        throw this.decorateGitHubError(error);
-      }
+      retriesPerformed += requestRetries;
       pagesFetched += 1;
       const advisories = Array.isArray(response.data) ? response.data : (response.data.items ?? []);
       let newItems = 0;
@@ -193,14 +185,15 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
       feedId: this.id,
       pagesFetched,
       itemsFetched: collected.length,
-      warnings
+      warnings,
+      retriesPerformed
     });
 
     return {
       vulnerabilities: collected,
       pagesFetched,
       warnings,
-      retriesPerformed: 0
+      retriesPerformed
     };
   }
 
@@ -214,14 +207,14 @@ export class GitHubAdvisoryClient implements VulnerabilityFeed {
     if (!(error instanceof ClientHttpError)) return error;
 
     if (error.metadata.status === 401) {
-      return new ClientHttpError(
+      return new AuthFailureHttpError(
         'GitHub advisories request unauthorized (401). Check token validity for the configured GitHub feed.',
         error.metadata
       );
     }
     if (error.metadata.status === 403) {
       const hasToken = Boolean(this.token);
-      return new ClientHttpError(
+      return new AuthFailureHttpError(
         hasToken
           ? 'GitHub advisories request forbidden (403). Token may be missing required advisory access permissions or may be rate-limited.'
           : 'GitHub advisories request forbidden (403). Configure a GitHub token to avoid low anonymous rate limits.',

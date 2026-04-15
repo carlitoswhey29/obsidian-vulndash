@@ -28,7 +28,7 @@ import type {
 import { buildSbomOverrideKey } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
 import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
-import { HttpClient } from './infrastructure/api/HttpClient';
+import { HttpClient } from './infrastructure/clients/common/HttpClient';
 import { buildVulnerabilityNoteBody } from './infrastructure/obsidian/VulnerabilityNote';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
 import { VulnDashSettingTab } from './infrastructure/obsidian/VulnDashSettingsTab';

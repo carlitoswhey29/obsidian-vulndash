@@ -25,6 +25,13 @@ test('validateDateRange preserves valid UTC bounds', () => {
   });
 });
 
+test('validateIsoUtcDate accepts valid UTC timestamps', () => {
+  assert.equal(
+    validateIsoUtcDate('2026-04-15T00:00:00.000Z', 'lastModStartDate'),
+    '2026-04-15T00:00:00.000Z'
+  );
+});
+
 test('validateDateRange rejects inverted ranges', () => {
   assert.throws(
     () => validateDateRange('2026-04-15T02:00:00.000Z', '2026-04-15T01:00:00.000Z'),

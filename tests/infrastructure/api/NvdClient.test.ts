@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NvdClient } from '../../../src/infrastructure/clients/nvd/NvdClient';
 import type { IHttpClient, HttpResponse } from '../../../src/application/ports/IHttpClient';
+import { AuthFailureHttpError, ClientHttpError } from '../../../src/application/ports/HttpRequestError';
 
 test('reuses fixed since/until window across NVD pages and advances via API metadata', async () => {
   const seenUrls: string[] = [];
@@ -226,4 +227,119 @@ test('passes apiKey in NVD request headers instead of the query string', async (
 
   assert.doesNotMatch(seenUrl, /apiKey=secret-key/);
   assert.deepEqual(seenHeaders, { apiKey: 'secret-key' });
+});
+
+test('guards against duplicate NVD start indexes', async () => {
+  const responses: Array<HttpResponse<unknown>> = [{
+    status: 200,
+    headers: {},
+    data: {
+      startIndex: 0,
+      resultsPerPage: 0,
+      totalResults: 2,
+      vulnerabilities: [{
+        cve: {
+          id: 'CVE-2026-5000',
+          published: '2026-02-01T00:00:00.000Z',
+          lastModified: '2026-02-01T01:00:00.000Z'
+        }
+      }]
+    }
+  }];
+
+  const httpClient: IHttpClient = {
+    async getJson() {
+      const next = responses.shift();
+      if (!next) {
+        throw new Error('unexpected request');
+      }
+      return next as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 5 });
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.equal(result.pagesFetched, 1);
+  assert.ok(result.warnings.includes('duplicate_start_index'));
+});
+
+test('warns when NVD pagination hits the max pages guard', async () => {
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          startIndex: 0,
+          resultsPerPage: 1,
+          totalResults: 3,
+          vulnerabilities: [{
+            cve: {
+              id: 'CVE-2026-5001',
+              published: '2026-02-01T00:00:00.000Z',
+              lastModified: '2026-02-01T01:00:00.000Z'
+            }
+          }]
+        }
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 1 });
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.ok(result.warnings.includes('max_pages_reached'));
+});
+
+test('warns when NVD page results exceed the max items guard', async () => {
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          startIndex: 0,
+          resultsPerPage: 2,
+          totalResults: 2,
+          vulnerabilities: [
+            {
+              cve: {
+                id: 'CVE-2026-5002',
+                published: '2026-02-01T00:00:00.000Z',
+                lastModified: '2026-02-01T01:00:00.000Z'
+              }
+            },
+            {
+              cve: {
+                id: 'CVE-2026-5003',
+                published: '2026-02-01T00:00:00.000Z',
+                lastModified: '2026-02-01T01:00:00.000Z'
+              }
+            }
+          ]
+        }
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 1, maxPages: 2 });
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.equal(result.vulnerabilities.length, 1);
+  assert.ok(result.warnings.includes('max_items_reached'));
+});
+
+test('validateConnection surfaces provider-specific NVD auth guidance', async () => {
+  const httpClient: IHttpClient = {
+    async getJson() {
+      throw new ClientHttpError('HTTP 403', { status: 403, url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' });
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
+  await assert.rejects(
+    () => client.validateConnection(new AbortController().signal),
+    (error: unknown) => error instanceof AuthFailureHttpError && error.message.includes('Configure a valid NVD API key')
+  );
 });

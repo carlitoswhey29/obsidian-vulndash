@@ -35,6 +35,12 @@ export class RateLimitHttpError extends HttpRequestError {
   }
 }
 
+export class AuthFailureHttpError extends HttpRequestError {
+  public constructor(message: string, metadata: HttpErrorMetadata) {
+    super('AuthFailureHttpError', message, false, metadata);
+  }
+}
+
 export class ClientHttpError extends HttpRequestError {
   public constructor(message: string, metadata: HttpErrorMetadata) {
     super('ClientHttpError', message, false, metadata);

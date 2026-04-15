@@ -1,9 +1,9 @@
-import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
 import type { IHttpClient } from '../../../application/ports/IHttpClient';
+import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../../domain/entities/Vulnerability';
 import { classifySeverity } from '../../../domain/services/Cvss';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
-import type { FeedSyncControls } from './GitHubAdvisoryClient';
+import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
 import { extractNextLink } from './GitHubAdvisoryClient';
 
 type GitHubRepoAdvisoryItem = {
@@ -48,17 +48,18 @@ const uniqueNonEmpty = (values: string[]): string[] => {
   return result;
 };
 
-export class GitHubRepoClient implements VulnerabilityFeed {
+export class GitHubRepoClient extends ClientBase implements VulnerabilityFeed {
   private readonly normalizedRepoPath: string;
 
   public constructor(
-    private readonly httpClient: IHttpClient,
+    httpClient: IHttpClient,
     public readonly id: string,
     public readonly name: string,
     private readonly token: string,
     repoPath: string,
     private readonly controls: FeedSyncControls
   ) {
+    super(httpClient, name, controls);
     this.normalizedRepoPath = normalizeRepoPath(repoPath);
   }
 
@@ -73,6 +74,7 @@ export class GitHubRepoClient implements VulnerabilityFeed {
     const collected: Vulnerability[] = [];
     const seenUrls = new Set<string>();
     let pagesFetched = 0;
+    let retriesPerformed = 0;
 
     const params = new URLSearchParams({ per_page: '100', affects: this.normalizedRepoPath });
     if (options.since) params.set('updated', options.since);
@@ -85,7 +87,13 @@ export class GitHubRepoClient implements VulnerabilityFeed {
       }
       seenUrls.add(nextUrl);
 
-      const response = await this.httpClient.getJson<GitHubRepoAdvisoryResponse>(nextUrl, headers, options.signal);
+      const { response, retriesPerformed: requestRetries } = await this.executeGetJson<GitHubRepoAdvisoryResponse>({
+        operationName: 'fetchVulnerabilities',
+        url: nextUrl,
+        headers,
+        signal: options.signal
+      });
+      retriesPerformed += requestRetries;
       pagesFetched += 1;
 
       const advisories = Array.isArray(response.data) ? response.data : (response.data.items ?? []);
@@ -118,7 +126,7 @@ export class GitHubRepoClient implements VulnerabilityFeed {
       vulnerabilities: collected,
       pagesFetched,
       warnings,
-      retriesPerformed: 0
+      retriesPerformed
     };
   }
 

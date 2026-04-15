@@ -1,4 +1,5 @@
 import {
+  AuthFailureHttpError,
   ClientHttpError,
   HttpRequestError,
   RateLimitHttpError,
@@ -229,8 +230,10 @@ export class PollingOrchestrator {
       || error instanceof TimeoutHttpError
       || error instanceof RateLimitHttpError
       || error instanceof ServerHttpError
-      || (error instanceof HttpRequestError && error.retryable)
-      || (!(error instanceof ClientHttpError) && error instanceof Error);
+      || (error instanceof HttpRequestError
+        && error.retryable
+        && !(error instanceof ClientHttpError)
+        && !(error instanceof AuthFailureHttpError));
   }
 
   private mergeIntoCache(items: Vulnerability[]): { itemsMerged: number; itemsDeduplicated: number } {

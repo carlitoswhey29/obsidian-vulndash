@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHubAdvisoryClient, extractNextLink } from '../../../src/infrastructure/clients/github/GitHubAdvisoryClient';
 import type { HttpResponse, IHttpClient } from '../../../src/application/ports/IHttpClient';
-import { ClientHttpError, RateLimitHttpError } from '../../../src/application/ports/HttpRequestError';
+import { AuthFailureHttpError, ClientHttpError, RateLimitHttpError } from '../../../src/application/ports/HttpRequestError';
 import { PollingOrchestrator } from '../../../src/application/services/PollingOrchestrator';
 import type { VulnerabilityFeed } from '../../../src/application/ports/VulnerabilityFeed';
 
@@ -211,7 +211,7 @@ test('surfaces clear auth failure message', async () => {
   const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
   await assert.rejects(
     () => client.fetchVulnerabilities({ signal: new AbortController().signal }),
-    (error: unknown) => error instanceof ClientHttpError && error.message.includes('Configure a GitHub token')
+    (error: unknown) => error instanceof AuthFailureHttpError && error.message.includes('Configure a GitHub token')
   );
 });
 

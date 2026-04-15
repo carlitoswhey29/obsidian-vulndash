@@ -1,9 +1,9 @@
-import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
-import type { IHttpClient } from '../../application/ports/IHttpClient';
-import type { Vulnerability } from '../../domain/entities/Vulnerability';
-import { classifySeverity } from '../../domain/services/Cvss';
-import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../utils/sanitize';
-import type { FeedSyncControls } from '../clients/github/GitHubAdvisoryClient';
+import type { IHttpClient } from '../../../application/ports/IHttpClient';
+import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
+import type { Vulnerability } from '../../../domain/entities/Vulnerability';
+import { classifySeverity } from '../../../domain/services/Cvss';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
+import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
 
 type GenericSeverity = 'none' | 'low' | 'medium' | 'high' | 'critical';
 
@@ -34,16 +34,18 @@ const severityToScore = (severity: GenericSeverity | undefined): number => {
   }
 };
 
-export class GenericJsonFeedClient implements VulnerabilityFeed {
+export class GenericJsonFeedClient extends ClientBase implements VulnerabilityFeed {
   public constructor(
-    private readonly httpClient: IHttpClient,
+    httpClient: IHttpClient,
     public readonly id: string,
     public readonly name: string,
     private readonly url: string,
     private readonly token: string,
     private readonly authHeaderName: string,
     private readonly controls: FeedSyncControls
-  ) {}
+  ) {
+    super(httpClient, name, controls);
+  }
 
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
     const warnings: string[] = [];
@@ -52,7 +54,13 @@ export class GenericJsonFeedClient implements VulnerabilityFeed {
       headers[this.authHeaderName] = this.token;
     }
 
-    const response = await this.httpClient.getJson<GenericFeedResponse>(this.url, headers, options.signal);
+    const { response, retriesPerformed } = await this.executeGetJson<GenericFeedResponse>({
+      operationName: 'fetchVulnerabilities',
+      url: this.url,
+      headers,
+      signal: options.signal
+    });
+
     const records = response.data.vulnerabilities ?? [];
     const vulnerabilities = records
       .slice(0, this.controls.maxItems)
@@ -66,7 +74,7 @@ export class GenericJsonFeedClient implements VulnerabilityFeed {
       vulnerabilities,
       pagesFetched: 1,
       warnings,
-      retriesPerformed: 0
+      retriesPerformed
     };
   }
 
