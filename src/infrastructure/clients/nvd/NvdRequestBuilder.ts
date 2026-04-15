@@ -5,44 +5,68 @@ import {
   validateDateRange,
   validateStartIndex
 } from './NvdValidators';
-
-export interface NvdRequestParts {
-  url: string;
-  headers: Record<string, string>;
-}
+import type { NvdRequestParts, NvdRequestQuery } from './NvdTypes';
 
 export class NvdRequestBuilder {
   public constructor(private readonly apiKey?: string) {}
 
-  public build(
+  public buildFetchRequest(
     since: string | undefined,
     until: string | undefined,
     startIndex: number
   ): NvdRequestParts {
-    const safeStartIndex = validateStartIndex(startIndex);
-    const { since: safeSince, until: safeUntil } = validateDateRange(since, until);
+    const safeQuery = this.buildFetchQuery(since, until, startIndex);
 
+    return {
+      url: this.buildUrl(safeQuery),
+      headers: this.buildHeaders()
+    };
+  }
+
+  public buildValidationRequest(): NvdRequestParts {
+    return {
+      url: this.buildUrl({ startIndex: 0 }),
+      headers: this.buildHeaders()
+    };
+  }
+
+  private buildFetchQuery(
+    since: string | undefined,
+    until: string | undefined,
+    startIndex: number
+  ): NvdRequestQuery {
+    const safeStartIndex = validateStartIndex(startIndex);
+    const safeDateRange = validateDateRange(since, until);
+
+    return {
+      startIndex: safeStartIndex,
+      ...safeDateRange
+    };
+  }
+
+  private buildUrl(query: NvdRequestQuery): string {
     const params = new URLSearchParams({
       resultsPerPage: String(NVD_RESULTS_PER_PAGE),
-      startIndex: String(safeStartIndex)
+      startIndex: String(query.startIndex)
     });
 
-    if (safeSince) {
-      params.set('lastModStartDate', safeSince);
+    if (query.since) {
+      params.set('lastModStartDate', query.since);
     }
 
-    if (safeUntil) {
-      params.set('lastModEndDate', safeUntil);
+    if (query.until) {
+      params.set('lastModEndDate', query.until);
     }
 
+    return `${NVD_BASE_URL}?${params.toString()}`;
+  }
+
+  private buildHeaders(): Record<string, string> {
     const headers: Record<string, string> = {};
     if (this.apiKey) {
       headers.apiKey = validateApiKey(this.apiKey);
     }
 
-    return {
-      url: `${NVD_BASE_URL}?${params.toString()}`,
-      headers
-    };
+    return headers;
   }
 }

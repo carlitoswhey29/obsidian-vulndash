@@ -5,7 +5,7 @@ import type { Vulnerability } from '../../../domain/entities/Vulnerability';
 import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
 import type { ClientLogger } from '../common/ClientLogger';
 import type { RetryPolicy } from '../common/RetryPolicy';
-import type { NvdResponse } from './NvdTypes';
+import type { NvdRequestParts, NvdResponse } from './NvdTypes';
 import { NvdMapper } from './NvdMapper';
 import { NvdRequestBuilder } from './NvdRequestBuilder';
 
@@ -101,7 +101,7 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
   }
 
   public async validateConnection(signal: AbortSignal): Promise<void> {
-    await this.fetchPage(0, undefined, undefined, signal, 'validateConnection');
+    await this.executeRequest(this.requestBuilder.buildValidationRequest(), signal, 'validateConnection');
   }
 
   private async fetchPage(
@@ -111,7 +111,15 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
     signal: AbortSignal,
     operationName: string
   ): Promise<{ response: HttpResponse<NvdResponse>; retriesPerformed: number }> {
-    const request = this.requestBuilder.build(since, until, startIndex);
+    const request = this.requestBuilder.buildFetchRequest(since, until, startIndex);
+    return this.executeRequest(request, signal, operationName);
+  }
+
+  private async executeRequest(
+    request: NvdRequestParts,
+    signal: AbortSignal,
+    operationName: string
+  ): Promise<{ response: HttpResponse<NvdResponse>; retriesPerformed: number }> {
     return this.getJsonWithResilience<NvdResponse>({
       context: {
         provider: this.name,

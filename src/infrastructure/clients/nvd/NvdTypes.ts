@@ -2,6 +2,22 @@ export interface NvdCvssMetric {
   cvssData?: { baseScore?: number };
 }
 
+export interface NvdDateRange {
+  since?: string;
+  until?: string;
+}
+
+export interface NvdRequestQuery {
+  startIndex: number;
+  since?: string;
+  until?: string;
+}
+
+export interface NvdRequestParts {
+  url: string;
+  headers: Record<string, string>;
+}
+
 export interface NvdCpeMatch {
   criteria?: string;
   vulnerable?: boolean;
