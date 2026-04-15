@@ -5,7 +5,6 @@
  */
 export const sanitizeText = (value: string): string =>
   value
-    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -16,7 +15,6 @@ export const sanitizeText = (value: string): string =>
 export const sanitizeMarkdown = (value: string): string =>
   value
     .replace(/\r\n/g, '\n')
-    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
     .trim();
 
