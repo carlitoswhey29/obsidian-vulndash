@@ -230,6 +230,34 @@ test('passes apiKey in NVD request headers instead of the query string', async (
   assert.deepEqual(seenHeaders, { apiKey: 'secret-key' });
 });
 
+test('passes apiKey in NVD validation request headers instead of the query string', async () => {
+  let seenUrl = '';
+  let seenHeaders: Record<string, string> | undefined;
+
+  const httpClient: IHttpClient = {
+    async getJson(url, headers) {
+      seenUrl = url;
+      seenHeaders = headers;
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          startIndex: 0,
+          resultsPerPage: 0,
+          totalResults: 0,
+          vulnerabilities: []
+        }
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', 'secret-key', { maxItems: 10, maxPages: 2 });
+  await client.validateConnection(new AbortController().signal);
+
+  assert.doesNotMatch(seenUrl, /apiKey=secret-key/);
+  assert.deepEqual(seenHeaders, { apiKey: 'secret-key' });
+});
+
 test('guards against duplicate NVD start indexes', async () => {
   const responses: Array<HttpResponse<unknown>> = [{
     status: 200,
@@ -429,6 +457,45 @@ test('sanitizes NVD apiKey headers before request logging', async () => {
     { logger }
   );
   await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.equal(seenHeaders.length, 1);
+  assert.deepEqual(seenHeaders[0], { apiKey: '[REDACTED]' });
+});
+
+test('sanitizes NVD apiKey headers before validation request logging', async () => {
+  const seenHeaders: Array<Record<string, string>> = [];
+  const logger: ClientLogger = {
+    onRequestStart(context) {
+      seenHeaders.push(context.headers);
+    },
+    onRequestSuccess() {},
+    onRequestRetry() {},
+    onRequestFailure() {}
+  };
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          startIndex: 0,
+          resultsPerPage: 0,
+          totalResults: 0,
+          vulnerabilities: []
+        }
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(
+    httpClient,
+    'nvd-default',
+    'NVD',
+    'secret-key',
+    { maxItems: 10, maxPages: 2 },
+    { logger }
+  );
+  await client.validateConnection(new AbortController().signal);
 
   assert.equal(seenHeaders.length, 1);
   assert.deepEqual(seenHeaders[0], { apiKey: '[REDACTED]' });

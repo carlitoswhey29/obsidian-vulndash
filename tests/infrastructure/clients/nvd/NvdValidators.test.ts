@@ -60,4 +60,6 @@ test('validateStartIndex enforces integer bounds', () => {
 test('validateApiKey trims valid input and rejects control characters', () => {
   assert.equal(validateApiKey(' secret-key '), 'secret-key');
   assert.throws(() => validateApiKey('secret\nkey'), /invalid control characters/);
+  assert.throws(() => validateApiKey('secret\tkey'), /invalid control characters/);
+  assert.throws(() => validateApiKey('secret\u0000key'), /invalid control characters/);
 });

@@ -62,6 +62,10 @@ export function validateStartIndex(startIndex: number): number {
 }
 
 export function validateApiKey(apiKey: string): string {
+  if (/[\x00-\x1F\x7F]/.test(apiKey)) {
+    throw new Error('apiKey contains invalid control characters.');
+  }
+
   const trimmed = apiKey.trim();
 
   if (trimmed.length === 0) {
@@ -70,10 +74,6 @@ export function validateApiKey(apiKey: string): string {
 
   if (trimmed.length > 256) {
     throw new Error('apiKey is too long.');
-  }
-
-  if (/[\r\n]/.test(trimmed)) {
-    throw new Error('apiKey contains invalid control characters.');
   }
 
   return trimmed;
