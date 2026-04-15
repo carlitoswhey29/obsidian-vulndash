@@ -3,9 +3,16 @@ import type { HttpResponse, IHttpClient } from '../../../application/ports/IHttp
 import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../../domain/entities/Vulnerability';
 import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
+import type { ClientLogger } from '../common/ClientLogger';
+import type { RetryPolicy } from '../common/RetryPolicy';
 import type { NvdResponse } from './NvdTypes';
 import { NvdMapper } from './NvdMapper';
 import { NvdRequestBuilder } from './NvdRequestBuilder';
+
+export interface NvdClientDependencies {
+  logger?: ClientLogger;
+  retryPolicy?: RetryPolicy;
+}
 
 export class NvdClient extends ClientBase implements VulnerabilityFeed {
   private readonly mapper: NvdMapper;
@@ -16,9 +23,10 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
     public readonly id: string,
     public readonly name: string,
     private readonly apiKey: string,
-    private readonly controls: FeedSyncControls
+    private readonly controls: FeedSyncControls,
+    dependencies: NvdClientDependencies = {}
   ) {
-    super(httpClient, name, controls);
+    super(httpClient, name, controls, dependencies.logger, dependencies.retryPolicy);
     this.mapper = new NvdMapper(this.name);
     this.requestBuilder = new NvdRequestBuilder(this.apiKey);
   }
