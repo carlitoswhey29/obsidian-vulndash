@@ -112,9 +112,12 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
     operationName: string
   ): Promise<{ response: HttpResponse<NvdResponse>; retriesPerformed: number }> {
     const request = this.requestBuilder.build(since, until, startIndex);
-    return this.executeGetJson<NvdResponse>({
-      operationName,
-      url: request.url,
+    return this.getJsonWithResilience<NvdResponse>({
+      context: {
+        provider: this.name,
+        operation: operationName,
+        url: request.url
+      },
       headers: request.headers,
       signal,
       decorateError: (error) => this.decorateNvdError(error)
