@@ -1,15 +1,9 @@
-import { HttpRequestError, RateLimitHttpError, RetryableNetworkError, ServerHttpError, TimeoutHttpError } from '../../../application/ports/HttpRequestError';
+import { HttpRequestError } from '../../../application/ports/HttpRequestError';
 import type { ClientLogger } from './ClientLogger';
 import type { ClientRequestContext } from './ClientRequestContext';
-import { computeRetryDelayMs, type RetryPolicy } from './RetryPolicy';
+import { normalizeRetryPolicy, type RetryPolicy } from './RetryPolicy';
 
-export interface RetryExecutionResult<T> {
-  value: T;
-  retriesPerformed: number;
-}
-
-interface RetryExecutorOptions {
-  logger: ClientLogger;
+interface RetryExecutorDependencies {
   random?: () => number;
   sleep?: (delayMs: number) => Promise<void>;
 }
@@ -18,67 +12,39 @@ const sleep = async (delayMs: number): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
 };
 
-const isRetryableHttpError = (error: unknown): error is HttpRequestError =>
-  error instanceof RetryableNetworkError
-  || error instanceof TimeoutHttpError
-  || error instanceof RateLimitHttpError
-  || error instanceof ServerHttpError;
+const isRetryableHttpRequestError = (error: unknown): error is HttpRequestError =>
+  error instanceof HttpRequestError && error.retryable;
 
 export class RetryExecutor {
+  private readonly policy: RetryPolicy;
   private readonly random: () => number;
   private readonly sleep: (delayMs: number) => Promise<void>;
 
   public constructor(
-    private readonly policy: RetryPolicy,
-    private readonly options: RetryExecutorOptions
+    policy: RetryPolicy,
+    private readonly logger: ClientLogger,
+    dependencies: RetryExecutorDependencies = {}
   ) {
-    this.random = options.random ?? Math.random;
-    this.sleep = options.sleep ?? sleep;
+    this.policy = normalizeRetryPolicy(policy);
+    this.random = dependencies.random ?? Math.random;
+    this.sleep = dependencies.sleep ?? sleep;
   }
 
   public async execute<T>(
-    contextFactory: (attemptNumber: number) => ClientRequestContext,
-    request: (attemptNumber: number) => Promise<T>
-  ): Promise<RetryExecutionResult<T>> {
-    let retriesPerformed = 0;
-
-    for (let attemptNumber = 1; attemptNumber <= this.policy.maxAttempts; attemptNumber += 1) {
-      const context = contextFactory(attemptNumber);
-      this.options.logger.requestStart(context);
-
+    action: (attempt: number) => Promise<T>,
+    baseContext: Omit<ClientRequestContext, 'attempt'>
+  ): Promise<T> {
+    for (let attempt = 1; attempt <= this.policy.maxAttempts; attempt += 1) {
       try {
-        const value = await request(attemptNumber);
-        const status = this.extractStatus(value);
-        this.options.logger.requestSuccess(context, status);
-        return { value, retriesPerformed };
+        return await action(attempt);
       } catch (error: unknown) {
-        this.options.logger.requestFailure(context, {
-          errorName: error instanceof Error ? error.name : 'UnknownError',
-          message: error instanceof Error ? error.message : 'Unknown request failure',
-          ...(error instanceof HttpRequestError && error.metadata.status !== undefined
-            ? { status: error.metadata.status }
-            : {})
-        });
-
-        if (!isRetryableHttpError(error) || attemptNumber >= this.policy.maxAttempts) {
+        if (!isRetryableHttpRequestError(error) || attempt >= this.policy.maxAttempts) {
+          this.logger.onRequestFailure(this.buildContext(baseContext, attempt, error));
           throw error;
         }
 
-        retriesPerformed += 1;
-        const delayMs = computeRetryDelayMs(
-          this.policy,
-          attemptNumber,
-          error.metadata.retryAfterMs,
-          this.random
-        );
-
-        this.options.logger.requestRetry(context, {
-          errorName: error.name,
-          message: error.message,
-          delayMs,
-          ...(error.metadata.status !== undefined ? { status: error.metadata.status } : {})
-        });
-
+        const delayMs = this.computeRetryDelayMs(attempt, error.metadata.retryAfterMs);
+        this.logger.onRequestRetry(this.buildContext(baseContext, attempt, error, delayMs));
         await this.sleep(delayMs);
       }
     }
@@ -86,16 +52,42 @@ export class RetryExecutor {
     throw new Error('RetryExecutor exhausted attempts without returning a result.');
   }
 
-  private extractStatus<T>(value: T): number {
-    if (
-      typeof value === 'object'
-      && value !== null
-      && 'status' in value
-      && typeof (value as { status: unknown }).status === 'number'
-    ) {
-      return (value as { status: number }).status;
+  private computeRetryDelayMs(attempt: number, retryAfterMs: number | undefined): number {
+    if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)) {
+      return Math.max(0, Math.trunc(retryAfterMs));
     }
 
-    return 200;
+    const boundedDelay = Math.min(
+      this.policy.baseDelayMs * (2 ** Math.max(0, attempt - 1)),
+      this.policy.maxDelayMs
+    );
+
+    if (!this.policy.jitter) {
+      return boundedDelay;
+    }
+
+    const jitterMultiplier = 0.5 + this.random();
+    return Math.min(
+      this.policy.maxDelayMs,
+      Math.max(0, Math.round(boundedDelay * jitterMultiplier))
+    );
+  }
+
+  private buildContext(
+    baseContext: Omit<ClientRequestContext, 'attempt'>,
+    attempt: number,
+    error: unknown,
+    retryDelayMs?: number
+  ): ClientRequestContext {
+    const errorName = error instanceof Error ? error.name : 'UnknownError';
+    const status = error instanceof HttpRequestError ? error.metadata.status : undefined;
+
+    return {
+      ...baseContext,
+      attempt,
+      ...(status !== undefined ? { status } : {}),
+      ...(retryDelayMs !== undefined ? { retryDelayMs } : {}),
+      errorName
+    };
   }
 }

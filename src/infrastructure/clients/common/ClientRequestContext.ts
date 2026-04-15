@@ -1,7 +1,10 @@
 export interface ClientRequestContext {
-  providerName: string;
-  operationName: string;
+  provider: string;
+  operation: string;
   url: string;
-  safeHeaders: Record<string, string>;
-  attemptNumber: number;
+  headers: Record<string, string>;
+  attempt: number;
+  status?: number;
+  retryDelayMs?: number;
+  errorName?: string;
 }

@@ -1,10 +1,19 @@
-const SENSITIVE_HEADER_PATTERN = /authorization|api[-_]?key|token|secret|cookie|session/i;
+const REDACTED_VALUE = '[REDACTED]';
+const SENSITIVE_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'apikey',
+  'api-key',
+  'x-api-key',
+  'cookie',
+  'set-cookie'
+]);
 
-export const sanitizeHeadersForLogging = (headers: Record<string, string>): Record<string, string> => {
+export const sanitizeHeadersForLogs = (headers: Record<string, string>): Record<string, string> => {
   const sanitized: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(headers)) {
-    sanitized[key] = SENSITIVE_HEADER_PATTERN.test(key) ? '***REDACTED***' : value;
+    sanitized[key] = SENSITIVE_HEADERS.has(key.toLowerCase()) ? REDACTED_VALUE : value;
   }
 
   return sanitized;
