@@ -4,6 +4,9 @@ import {
   Plugin,
   WorkspaceLeaf
 } from 'obsidian';
+import { ComponentPreferenceService } from './application/sbom/ComponentPreferenceService';
+import { SbomCatalogService } from './application/sbom/SbomCatalogService';
+import type { ComponentCatalog } from './application/sbom/types';
 import { AlertEngine } from './application/services/AlertEngine';
 import { buildFeedsFromConfig } from './application/services/FeedFactory';
 import { PollingOrchestrator } from './application/services/PollingOrchestrator';
@@ -63,13 +66,16 @@ const DEFAULT_FEEDS: FeedConfig[] = [
   { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true }
 ];
 
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
   pollOnStartup: true,
   keywordFilters: [],
   manualProductFilters: [],
+  sbomFolders: [],
+  followedSbomComponentKeys: [],
+  disabledSbomComponentKeys: [],
   productFilters: [],
   minSeverity: 'MEDIUM',
   minCvssScore: 4.0,
@@ -107,6 +113,7 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
 };
 
 const legacyNameNormalizer = new ProductNameNormalizer();
+const componentPreferenceService = new ComponentPreferenceService();
 
 const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
 
@@ -117,6 +124,16 @@ const normalizeStringList = (values: string[] | undefined): string[] => {
 
   return Array.from(new Set(values
     .map((value) => value.trim())
+    .filter((value) => value.length > 0)));
+};
+
+const normalizePathList = (values: string[] | undefined): string[] => {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return Array.from(new Set(values
+    .map((value) => typeof value === 'string' ? normalizePath(value.trim()) : '')
     .filter((value) => value.length > 0)));
 };
 
@@ -252,10 +269,11 @@ const migrateLegacySbomOverrides = (sboms: LegacyImportedSbomConfig[]): Record<s
 };
 
 const normalizeRuntimeSettings = (settings: VulnDashSettings): VulnDashSettings => ({
-  ...settings,
+  ...componentPreferenceService.normalizeSettings(settings),
   keywordFilters: normalizeStringList(settings.keywordFilters),
   manualProductFilters: normalizeStringList(settings.manualProductFilters),
   productFilters: normalizeStringList(settings.productFilters),
+  sbomFolders: normalizePathList(settings.sbomFolders),
   sboms: settings.sboms.map((sbom, index) => normalizeImportedSbomConfig(sbom, index)),
   sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
   sbomPath: '',
@@ -358,8 +376,9 @@ export const buildPersistedSettingsSnapshot = (
   },
   feeds: FeedConfig[]
 ): VulnDashSettings => ({
-  ...settings,
+  ...componentPreferenceService.normalizeSettings(settings),
   sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
+  sbomFolders: normalizePathList(settings.sbomFolders),
   sbomPath: '',
   settingsVersion: SETTINGS_VERSION,
   nvdApiKey: secrets.nvdApiKey,
@@ -372,6 +391,8 @@ export default class VulnDashPlugin extends Plugin {
   private stopPolling: (() => void) | null = null;
   private pollingEnabled = false;
   private readonly alertEngine = new AlertEngine();
+  private readonly componentPreferenceService = componentPreferenceService;
+  private readonly sbomCatalogService = new SbomCatalogService();
   private readonly sbomComparisonService = new SbomComparisonService();
   private readonly sbomFilterMergeService = new SbomFilterMergeService();
   private sbomImportService: SbomImportService | null = null;
@@ -654,6 +675,36 @@ export default class VulnDashPlugin extends Plugin {
     return this.settings.sboms.find((sbom) => sbom.id === sbomId);
   }
 
+  public isSbomComponentFollowed(componentKey: string): boolean {
+    return this.componentPreferenceService.isFollowed(componentKey, this.settings);
+  }
+
+  public isSbomComponentEnabled(componentKey: string): boolean {
+    return this.componentPreferenceService.isEnabled(componentKey, this.settings);
+  }
+
+  public async followSbomComponent(componentKey: string): Promise<void> {
+    await this.applySettings(this.componentPreferenceService.follow(componentKey, this.settings));
+  }
+
+  public async unfollowSbomComponent(componentKey: string): Promise<void> {
+    await this.applySettings(this.componentPreferenceService.unfollow(componentKey, this.settings));
+  }
+
+  public async disableSbomComponent(componentKey: string): Promise<void> {
+    await this.applySettings(this.componentPreferenceService.disable(componentKey, this.settings));
+  }
+
+  public async enableSbomComponent(componentKey: string): Promise<void> {
+    await this.applySettings(this.componentPreferenceService.enable(componentKey, this.settings));
+  }
+
+  public async getSbomCatalog(): Promise<ComponentCatalog> {
+    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
+    const catalog = this.sbomCatalogService.buildCatalog(this.collectCatalogDocuments(loadResults));
+    return this.componentPreferenceService.applyPreferences(catalog, this.settings);
+  }
+
   public async getSbomComponents(sbomId: string): Promise<ResolvedSbomComponent[] | null> {
     const sbom = this.getSbomById(sbomId);
     if (!sbom) {
@@ -691,6 +742,16 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     return result.cachedState;
+  }
+
+  private collectCatalogDocuments(results: readonly SbomLoadResult[]): RuntimeSbomState['document'][] {
+    return results.flatMap((result) => {
+      if (result.success) {
+        return [result.state.document];
+      }
+
+      return result.cachedState ? [result.cachedState.document] : [];
+    });
   }
 
   private applySbomLoadResults(settings: VulnDashSettings, results: SbomLoadResult[]): VulnDashSettings {

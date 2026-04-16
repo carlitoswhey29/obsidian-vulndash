@@ -1,5 +1,4 @@
 import type {
-  NormalizedComponent,
   NormalizedCweGroup,
   NormalizedSeverity,
   NormalizedVulnerability
@@ -291,6 +290,8 @@ export class ComponentMergeService {
     const tracked: TrackedComponent = {
       cweGroups: buildCweGroups(component.vulnerabilities),
       formats: [document.format],
+      isEnabled: true,
+      isFollowed: false,
       key,
       name: component.name,
       sourceFiles: [document.sourcePath],
@@ -332,6 +333,8 @@ export class ComponentMergeService {
     const merged: TrackedComponent = {
       cweGroups: buildCweGroups(vulnerabilities),
       formats: Array.from(new Set([...left.formats, ...right.formats])).sort(compareFormats),
+      isEnabled: left.isEnabled && right.isEnabled,
+      isFollowed: left.isFollowed || right.isFollowed,
       key: left.key,
       name: pickDeterministicString(left.name, right.name) ?? left.name,
       sourceFiles: Array.from(new Set([...left.sourceFiles, ...right.sourceFiles])).sort(compareSourceFiles),

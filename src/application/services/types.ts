@@ -93,6 +93,9 @@ export interface VulnDashSettings {
   pollOnStartup: boolean;
   keywordFilters: string[];
   manualProductFilters: string[];
+  sbomFolders: string[];
+  followedSbomComponentKeys: string[];
+  disabledSbomComponentKeys: string[];
   /**
    * Computed output only. Manual edits must target `manualProductFilters`.
    */

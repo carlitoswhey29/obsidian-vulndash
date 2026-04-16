@@ -99,6 +99,8 @@ test('builds one merged catalog across CycloneDX and SPDX sources using stable k
       'cpe:cpe:2.3:a:react:react:18.3.1:*:*:*:*:*:*:*'
     ]
   );
+  assert.equal(catalog.components[0]?.isFollowed, false);
+  assert.equal(catalog.components[0]?.isEnabled, true);
   assert.equal(catalog.components[0]?.sourceFiles.length, 2);
   assert.equal(catalog.components[0]?.vulnerabilityCount, 1);
 });

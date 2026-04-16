@@ -21,6 +21,8 @@ export interface TrackedComponentSource {
 export interface TrackedComponent {
   cweGroups: NormalizedCweGroup[];
   formats: NormalizedSbomFormat[];
+  isEnabled: boolean;
+  isFollowed: boolean;
   key: string;
   name: string;
   sourceFiles: string[];

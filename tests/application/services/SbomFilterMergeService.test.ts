@@ -11,6 +11,9 @@ const DEFAULT_SETTINGS: VulnDashSettings = {
   pollOnStartup: true,
   keywordFilters: [],
   manualProductFilters: [],
+  sbomFolders: [],
+  followedSbomComponentKeys: [],
+  disabledSbomComponentKeys: [],
   productFilters: [],
   minSeverity: 'MEDIUM',
   minCvssScore: 4,
@@ -50,7 +53,7 @@ const DEFAULT_SETTINGS: VulnDashSettings = {
     debugHttpMetadata: false
   },
   sourceSyncCursor: {},
-  settingsVersion: 4,
+  settingsVersion: 5,
   feeds: []
 };
 
