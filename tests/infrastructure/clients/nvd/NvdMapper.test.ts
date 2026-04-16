@@ -64,8 +64,10 @@ test('extracts CWE and affected package metadata from NVD records', () => {
   assert.deepEqual(vulnerability.metadata?.vendors, ['Acme']);
   assert.deepEqual(vulnerability.metadata?.packages, ['Widget']);
   assert.deepEqual(vulnerability.metadata?.affectedPackages, [{
+    cpe: 'cpe:2.3:a:acme:widget:2.3.4:*:*:*:*:*:*:*',
     name: 'Widget',
     vendor: 'Acme',
+    version: '2.3.4',
     vulnerableVersionRange: '2.3.4, >= 2.0.0, < 2.4.0'
   }]);
   assert.deepEqual(vulnerability.metadata?.vulnerableVersionRanges, ['Acme Widget: 2.3.4, >= 2.0.0, < 2.4.0']);

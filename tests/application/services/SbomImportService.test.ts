@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SbomImportService } from '../../../src/application/services/SbomImportService';
+import {
+  SbomImportService,
+  type SbomComponentNotePathResolverFactory
+} from '../../../src/application/services/SbomImportService';
 import type { ImportedSbomConfig } from '../../../src/application/services/types';
 
 class InMemorySbomReader {
@@ -37,6 +40,39 @@ class MutableSbomReader extends InMemorySbomReader {
   }
 }
 
+class StaticNotePathResolverFactory implements SbomComponentNotePathResolverFactory {
+  public constructor(
+    private readonly notePathByKey: Record<string, string>
+  ) {}
+
+  public createResolver() {
+    return {
+      resolve: (component: {
+        cpe?: string;
+        name: string;
+        purl?: string;
+        version?: string;
+      }): string | null => {
+        const keys = [
+          component.purl ? `purl:${component.purl.toLowerCase()}` : '',
+          component.cpe ? `cpe:${component.cpe.toLowerCase()}` : '',
+          component.version ? `name-version:${component.name.toLowerCase()}@${component.version.toLowerCase()}` : '',
+          `name:${component.name.toLowerCase()}`
+        ].filter(Boolean);
+
+        for (const key of keys) {
+          const notePath = this.notePathByKey[key];
+          if (notePath) {
+            return notePath;
+          }
+        }
+
+        return null;
+      }
+    };
+  }
+}
+
 const createSbomConfig = (overrides: Partial<ImportedSbomConfig> = {}): ImportedSbomConfig => ({
   contentHash: '',
   enabled: true,
@@ -50,6 +86,7 @@ const createSbomConfig = (overrides: Partial<ImportedSbomConfig> = {}): Imported
 test('loads CycloneDX components into runtime cache, normalizes names, and deduplicates by original name', async () => {
   const service = new SbomImportService(new InMemorySbomReader({
     'reports/sbom.json': JSON.stringify({
+      bomFormat: 'CycloneDX',
       metadata: {
         component: {
           name: 'platform-api'
@@ -71,10 +108,88 @@ test('loads CycloneDX components into runtime cache, normalizes names, and dedup
   }
 
   assert.equal(result.state.components.length, 2);
+  assert.equal(result.state.document.format, 'cyclonedx');
   assert.equal(result.state.components[0]?.normalizedName, 'Apache Tomcat 10.1.31');
   assert.equal(result.state.components[1]?.normalizedName, 'Platform Api');
   assert.equal(typeof result.state.hash, 'string');
   assert.equal(service.getRuntimeState('sbom-1')?.components.length, 2);
+});
+
+test('loads SPDX package metadata through the shared parser', async () => {
+  const service = new SbomImportService(new InMemorySbomReader({
+    'reports/sbom.spdx.json': JSON.stringify({
+      SPDXID: 'SPDXRef-DOCUMENT',
+      name: 'Primary SPDX Document',
+      packages: [
+        {
+          SPDXID: 'SPDXRef-Package-portal-web',
+          externalRefs: [
+            {
+              referenceLocator: 'pkg:npm/portal-web@1.2.3',
+              referenceType: 'purl'
+            }
+          ],
+          licenseDeclared: 'MIT',
+          name: 'portal-web',
+          supplier: 'Organization: Example Co',
+          versionInfo: '1.2.3'
+        }
+      ],
+      spdxVersion: 'SPDX-2.3'
+    })
+  }));
+
+  const result = await service.loadSbom(createSbomConfig({
+    path: 'reports/sbom.spdx.json'
+  }));
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.state.document.format, 'spdx');
+  assert.equal(result.state.document.components[0]?.purl, 'pkg:npm/portal-web@1.2.3');
+  assert.equal(result.state.components[0]?.normalizedName, 'Portal Web');
+});
+
+test('resolves component note paths during SBOM import when a resolver factory is configured', async () => {
+  const service = new SbomImportService(
+    new InMemorySbomReader({
+      'reports/sbom.spdx.json': JSON.stringify({
+        SPDXID: 'SPDXRef-DOCUMENT',
+        packages: [
+          {
+            SPDXID: 'SPDXRef-Package-portal-web',
+            externalRefs: [
+              {
+                referenceLocator: 'pkg:npm/portal-web@1.2.3',
+                referenceType: 'purl'
+              }
+            ],
+            name: 'portal-web',
+            versionInfo: '1.2.3'
+          }
+        ],
+        spdxVersion: 'SPDX-2.3'
+      })
+    }),
+    undefined,
+    new StaticNotePathResolverFactory({
+      'purl:pkg:npm/portal-web@1.2.3': 'Components/Portal Web.md'
+    })
+  );
+
+  const result = await service.loadSbom(createSbomConfig({
+    path: 'reports/sbom.spdx.json'
+  }));
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.state.document.components[0]?.notePath, 'Components/Portal Web.md');
 });
 
 test('returns cached runtime data when a later forced load fails', async () => {
@@ -129,7 +244,7 @@ test('returns a safe failure for missing files', async () => {
   assert.equal(service.getRuntimeState('sbom-1'), null);
 });
 
-test('validates readable CycloneDX-like JSON files before they are attached', async () => {
+test('validates readable supported SBOM JSON files before they are attached', async () => {
   const service = new SbomImportService(new InMemorySbomReader({
     'reports/sbom.json': JSON.stringify({
       bomFormat: 'CycloneDX',
@@ -147,7 +262,28 @@ test('validates readable CycloneDX-like JSON files before they are attached', as
   assert.equal(result.componentCount, 2);
 });
 
-test('rejects JSON files that do not look like CycloneDX SBOM documents', async () => {
+test('validates SPDX JSON files before they are attached', async () => {
+  const service = new SbomImportService(new InMemorySbomReader({
+    'reports/sbom.spdx.json': JSON.stringify({
+      SPDXID: 'SPDXRef-DOCUMENT',
+      packages: [
+        { name: 'portal-web' },
+        { name: 'api-gateway' }
+      ],
+      spdxVersion: 'SPDX-2.3'
+    })
+  }));
+
+  const result = await service.validateSbomPath('reports/sbom.spdx.json');
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.componentCount, 2);
+});
+
+test('rejects JSON files that are not a supported SBOM format', async () => {
   const service = new SbomImportService(new InMemorySbomReader({
     'reports/notes.json': JSON.stringify({
       title: 'not an sbom'
@@ -156,5 +292,8 @@ test('rejects JSON files that do not look like CycloneDX SBOM documents', async 
 
   const result = await service.validateSbomPath('reports/notes.json');
   assert.equal(result.success, false);
-  assert.equal(result.error, 'The selected file is valid JSON, but it does not look like a CycloneDX SBOM.');
+  assert.equal(
+    result.error,
+    'Unsupported SBOM JSON format in "reports/notes.json". Supported formats: CycloneDX JSON and SPDX JSON.'
+  );
 });

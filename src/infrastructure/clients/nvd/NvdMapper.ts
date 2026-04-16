@@ -188,8 +188,10 @@ export class NvdMapper {
     const vulnerableVersionRange = buildVersionRange(match, parsed.version);
 
     return {
+      ...(criteria ? { cpe: criteria } : {}),
       name: product,
       ...(vendor ? { vendor } : {}),
+      ...(parsed.version && parsed.version !== '*' && parsed.version !== '-' ? { version: parsed.version } : {}),
       ...(vulnerableVersionRange ? { vulnerableVersionRange } : {})
     };
   }
