@@ -4,9 +4,10 @@ import {
   Plugin,
   WorkspaceLeaf
 } from 'obsidian';
+import { ComponentInventoryService } from './application/sbom/ComponentInventoryService';
 import { ComponentPreferenceService } from './application/sbom/ComponentPreferenceService';
 import { SbomCatalogService } from './application/sbom/SbomCatalogService';
-import type { ComponentCatalog } from './application/sbom/types';
+import type { ComponentCatalog, ComponentInventorySnapshot } from './application/sbom/types';
 import { AlertEngine } from './application/services/AlertEngine';
 import { buildFeedsFromConfig } from './application/services/FeedFactory';
 import { PollingOrchestrator } from './application/services/PollingOrchestrator';
@@ -391,6 +392,7 @@ export default class VulnDashPlugin extends Plugin {
   private stopPolling: (() => void) | null = null;
   private pollingEnabled = false;
   private readonly alertEngine = new AlertEngine();
+  private readonly componentInventoryService = new ComponentInventoryService();
   private readonly componentPreferenceService = componentPreferenceService;
   private readonly sbomCatalogService = new SbomCatalogService();
   private readonly sbomComparisonService = new SbomComparisonService();
@@ -411,7 +413,14 @@ export default class VulnDashPlugin extends Plugin {
           await this.refreshNow();
         },
         async () => this.togglePolling(),
-        () => this.pollingEnabled
+        () => this.pollingEnabled,
+        {
+          disableComponent: async (componentKey) => this.disableSbomComponent(componentKey),
+          enableComponent: async (componentKey) => this.enableSbomComponent(componentKey),
+          followComponent: async (componentKey) => this.followSbomComponent(componentKey),
+          loadComponentInventory: async () => this.getComponentInventorySnapshot(),
+          unfollowComponent: async (componentKey) => this.unfollowSbomComponent(componentKey)
+        }
       )
     );
 
@@ -703,6 +712,11 @@ export default class VulnDashPlugin extends Plugin {
     const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
     const catalog = this.sbomCatalogService.buildCatalog(this.collectCatalogDocuments(loadResults));
     return this.componentPreferenceService.applyPreferences(catalog, this.settings);
+  }
+
+  public async getComponentInventorySnapshot(): Promise<ComponentInventorySnapshot> {
+    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
+    return this.componentInventoryService.buildSnapshot(this.settings, loadResults);
   }
 
   public async getSbomComponents(sbomId: string): Promise<ResolvedSbomComponent[] | null> {

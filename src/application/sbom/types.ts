@@ -45,6 +45,23 @@ export interface ComponentCatalog {
   sourceFiles: string[];
 }
 
+export interface ComponentInventoryIssue {
+  hasCachedData: boolean;
+  message: string;
+  sbomId: string;
+  sourcePath?: string;
+  title: string;
+}
+
+export interface ComponentInventorySnapshot {
+  catalog: ComponentCatalog;
+  configuredSbomCount: number;
+  enabledSbomCount: number;
+  failedSbomCount: number;
+  issues: ComponentInventoryIssue[];
+  parsedSbomCount: number;
+}
+
 export interface CatalogComponentInput {
   component: NormalizedComponent;
   document: {

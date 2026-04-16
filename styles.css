@@ -54,9 +54,43 @@
   margin-bottom: 1rem;
 }
 
+.vulndash-header-stacked {
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.vulndash-header-title-block {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.vulndash-header-title-block h2 {
+  margin: 0;
+}
+
 .vulndash-controls {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.vulndash-toolbar-buttons,
+.vulndash-tab-bar {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.vulndash-tab-button {
+  border-radius: 999px;
+}
+
+.vulndash-tab-button.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
 
 .vulndash-search-bar {
@@ -65,6 +99,30 @@
   border: 1px solid var(--background-modifier-border);
   color: var(--text-normal);
   border-radius: 4px;
+}
+
+.vulndash-card-shell {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--background-secondary) 94%, transparent), var(--background-secondary));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--background-modifier-border) 45%, transparent);
+}
+
+.vulndash-vulnerability-toolbar {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.vulndash-vulnerability-search {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.vulndash-vulnerability-search input {
+  width: 100%;
+  max-width: 440px;
 }
 
 /* --- ROW BOUNDARIES & HOVER STATES --- */
@@ -622,6 +680,293 @@
   font-size: var(--font-ui-medium);
 }
 
+.vulndash-component-inventory-view {
+  display: grid;
+  gap: 1rem;
+}
+
+.vulndash-component-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.vulndash-component-summary-card {
+  padding: 0.85rem 1rem;
+}
+
+.vulndash-component-summary-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vulndash-component-summary-value {
+  margin-top: 0.2rem;
+  font-size: var(--font-ui-large);
+  font-weight: 700;
+}
+
+.vulndash-component-summary-caption {
+  margin-top: 0.3rem;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vulndash-component-summary-banner {
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+}
+
+.vulndash-component-summary-banner p {
+  margin: 0.35rem 0 0;
+}
+
+.vulndash-component-summary-banner.is-error {
+  border: 1px solid color-mix(in srgb, var(--text-error) 30%, transparent);
+  background: color-mix(in srgb, var(--text-error) 10%, var(--background-secondary));
+}
+
+.vulndash-component-inventory-filter-shell {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.vulndash-component-filter-bar {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.95rem 1rem;
+}
+
+.vulndash-component-filter-search,
+.vulndash-component-filter-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.vulndash-component-filter-search input {
+  width: 100%;
+}
+
+.vulndash-component-filter-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.vulndash-component-filter-field.is-checkbox {
+  align-content: center;
+}
+
+.vulndash-component-filter-field select {
+  width: 100%;
+}
+
+.vulndash-component-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.vulndash-component-table-shell {
+  overflow-x: auto;
+}
+
+.vulndash-component-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.vulndash-component-table th,
+.vulndash-component-table td {
+  padding: 0.85rem 0.9rem;
+  border-top: 1px solid var(--background-modifier-border);
+  vertical-align: top;
+  user-select: text;
+}
+
+.vulndash-component-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--background-primary) 94%, transparent);
+  border-top: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.vulndash-component-row.is-followed {
+  background: color-mix(in srgb, var(--color-green, #22c55e) 6%, transparent);
+}
+
+.vulndash-component-row.is-disabled {
+  opacity: 0.72;
+}
+
+.vulndash-component-row.is-vulnerable {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--text-warning) 75%, transparent);
+}
+
+.vulndash-component-row:hover td {
+  background: color-mix(in srgb, var(--background-modifier-hover) 78%, var(--background-primary));
+}
+
+.vulndash-component-name-stack,
+.vulndash-component-vuln-stack {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.vulndash-component-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
+.vulndash-component-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.vulndash-component-table-mono {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  word-break: break-word;
+}
+
+.vulndash-severity-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+}
+
+.vulndash-severity-pill.is-critical {
+  color: var(--text-error);
+  background: color-mix(in srgb, var(--color-red, #ef4444) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-red, #ef4444) 24%, transparent);
+}
+
+.vulndash-severity-pill.is-high {
+  color: var(--text-warning);
+  background: color-mix(in srgb, var(--color-orange, #f59e0b) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-orange, #f59e0b) 24%, transparent);
+}
+
+.vulndash-severity-pill.is-medium {
+  color: var(--text-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+}
+
+.vulndash-severity-pill.is-low,
+.vulndash-severity-pill.is-informational,
+.vulndash-severity-pill.is-none {
+  color: var(--text-muted);
+  background: var(--background-primary-alt);
+  border-color: var(--background-modifier-border);
+}
+
+.vulndash-component-details-row td {
+  background: color-mix(in srgb, var(--background-secondary) 92%, transparent);
+}
+
+.vulndash-component-detail-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.vulndash-component-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.vulndash-component-detail-field,
+.vulndash-component-detail-section {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.vulndash-component-detail-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vulndash-component-detail-value.is-mono {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+
+.vulndash-component-detail-value.is-multiline {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.vulndash-component-detail-section h4 {
+  margin: 0;
+}
+
+.vulndash-component-vulnerability-list,
+.vulndash-component-source-list,
+.vulndash-component-issue-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.vulndash-component-vulnerability-item,
+.vulndash-component-source-item,
+.vulndash-component-issue-item {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary-alt);
+}
+
+.vulndash-component-vulnerability-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.vulndash-component-vulnerability-id,
+.vulndash-component-source-title {
+  font-family: var(--font-monospace);
+}
+
+.vulndash-component-vulnerability-description {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.vulndash-component-issue-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-color: color-mix(in srgb, var(--text-warning) 30%, var(--background-modifier-border));
+}
+
+.vulndash-component-issue-card h3 {
+  margin: 0;
+}
+
+.vulndash-component-state.is-error {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--text-error) 30%, transparent);
+}
+
 .vulndash-input-saving {
   outline: 1px solid var(--interactive-accent);
   opacity: 0.9;
@@ -634,7 +979,8 @@
 @media (max-width: 700px) {
   .vulndash-sbom-card-header,
   .vulndash-sbom-component-row-top,
-  .vulndash-sbom-workspace-toolbar {
+  .vulndash-sbom-workspace-toolbar,
+  .vulndash-header {
     flex-direction: column;
   }
 
@@ -654,7 +1000,8 @@
   }
 
   .vulndash-product-filters-toolbar-controls,
-  .vulndash-product-filters-source-header {
+  .vulndash-product-filters-source-header,
+  .vulndash-component-vulnerability-header {
     flex-direction: column;
     align-items: stretch;
   }
@@ -665,5 +1012,13 @@
 
   .vulndash-product-filters-sort {
     width: 100%;
+  }
+
+  .vulndash-component-row-actions {
+    justify-content: flex-start;
+  }
+
+  .vulndash-component-filter-actions {
+    justify-content: flex-start;
   }
 }
