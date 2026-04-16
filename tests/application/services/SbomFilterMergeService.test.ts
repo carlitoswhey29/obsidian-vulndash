@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SbomFilterMergeService } from '../../../src/application/services/SbomFilterMergeService';
+import type { NormalizedSbomDocument } from '../../../src/domain/sbom/types';
 import type { ImportedSbomConfig, RuntimeSbomState, VulnDashSettings } from '../../../src/application/services/types';
 import { buildSbomOverrideKey } from '../../../src/application/services/types';
 
@@ -65,6 +66,24 @@ const createSbom = (overrides: Partial<ImportedSbomConfig> = {}): ImportedSbomCo
 
 const createRuntimeState = (names: Array<{ normalizedName: string; originalName: string }>): RuntimeSbomState => ({
   components: names,
+  document: {
+    components: names.map((component, index) => ({
+      cweGroups: [],
+      dataview: {
+        cweList: [],
+        severities: [],
+        vulnerabilityCount: 0,
+        vulnerabilityIds: []
+      },
+      id: `${component.originalName}-${index}`,
+      name: component.originalName,
+      vulnerabilities: [],
+      vulnerabilityCount: 0
+    })),
+    format: 'cyclonedx',
+    name: 'Test SBOM',
+    sourcePath: 'reports/sbom.json'
+  } satisfies NormalizedSbomDocument,
   hash: 'hash-1',
   lastError: null,
   lastLoadedAt: 1,

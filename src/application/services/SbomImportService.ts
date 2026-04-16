@@ -1,24 +1,12 @@
 import { normalizePath } from 'obsidian';
+import { parseSbomJson } from '../../domain/sbom/parser';
+import type { NormalizedSbomDocument } from '../../domain/sbom/types';
 import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
 import type { ImportedSbomConfig, RuntimeSbomComponent, RuntimeSbomState, VulnDashSettings } from './types';
 
 interface SbomReader {
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<string>;
-}
-
-interface CycloneDxComponent {
-  components?: CycloneDxComponent[];
-  name?: unknown;
-}
-
-interface CycloneDxDocument {
-  bomFormat?: unknown;
-  components?: CycloneDxComponent[];
-  metadata?: {
-    component?: CycloneDxComponent;
-  };
-  specVersion?: unknown;
 }
 
 export interface SbomLoadSuccessResult {
@@ -96,9 +84,10 @@ export class SbomImportService {
 
     try {
       const raw = await this.reader.read(normalizedPath);
-      const parsed = this.parseSbom(raw);
+      const parsed = this.parseSbom(raw, normalizedPath);
       const state: RuntimeSbomState = {
         components: this.extractComponents(parsed),
+        document: parsed,
         hash: await this.hashContent(raw),
         lastError: null,
         lastLoadedAt: Date.now(),
@@ -199,17 +188,10 @@ export class SbomImportService {
       }
 
       const raw = await this.reader.read(normalizedPath);
-      const parsed = this.parseSbom(raw);
-      if (!this.looksLikeCycloneDxDocument(parsed)) {
-        return {
-          error: 'The selected file is valid JSON, but it does not look like a CycloneDX SBOM.',
-          normalizedPath,
-          success: false
-        };
-      }
+      const parsed = this.parseSbom(raw, normalizedPath);
 
       return {
-        componentCount: this.extractComponents(parsed).length,
+        componentCount: parsed.components.length,
         normalizedPath,
         success: true
       };
@@ -222,19 +204,24 @@ export class SbomImportService {
     }
   }
 
-  private parseSbom(raw: string): CycloneDxDocument {
+  private parseSbom(raw: string, sourcePath: string): NormalizedSbomDocument {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object') {
       throw new Error('SBOM file is not a valid JSON object.');
     }
 
-    return parsed as CycloneDxDocument;
+    return parseSbomJson(parsed, {
+      source: {
+        basename: this.getBasename(sourcePath),
+        path: sourcePath
+      }
+    });
   }
 
-  private extractComponents(document: CycloneDxDocument): RuntimeSbomComponent[] {
+  private extractComponents(document: NormalizedSbomDocument): RuntimeSbomComponent[] {
     const deduped = new Map<string, RuntimeSbomComponent>();
 
-    for (const component of this.flattenComponents(document)) {
+    for (const component of document.components) {
       const originalName = this.getString(component.name);
       if (!originalName) {
         continue;
@@ -255,47 +242,6 @@ export class SbomImportService {
       left.normalizedName.localeCompare(right.normalizedName) || left.originalName.localeCompare(right.originalName));
   }
 
-  private flattenComponents(document: CycloneDxDocument): CycloneDxComponent[] {
-    const queue: CycloneDxComponent[] = [];
-    if (document.metadata?.component) {
-      queue.push(document.metadata.component);
-    }
-    if (Array.isArray(document.components)) {
-      queue.push(...document.components);
-    }
-
-    const flattened: CycloneDxComponent[] = [];
-    while (queue.length > 0) {
-      const component = queue.shift();
-      if (!component) {
-        continue;
-      }
-
-      flattened.push(component);
-      if (Array.isArray(component.components)) {
-        queue.push(...component.components);
-      }
-    }
-
-    return flattened;
-  }
-
-  private looksLikeCycloneDxDocument(document: CycloneDxDocument): boolean {
-    if (this.getString(document.bomFormat).toLowerCase() === 'cyclonedx') {
-      return true;
-    }
-
-    if (this.getString(document.specVersion)) {
-      return true;
-    }
-
-    if (Array.isArray(document.components) || document.metadata?.component) {
-      return true;
-    }
-
-    return false;
-  }
-
   private async hashContent(content: string): Promise<string> {
     const buffer = new TextEncoder().encode(content);
     const digest = await crypto.subtle.digest('SHA-256', buffer);
@@ -306,6 +252,14 @@ export class SbomImportService {
   private normalizeSbomPath(path: string): string {
     const trimmed = path.trim();
     return trimmed ? normalizePath(trimmed) : '';
+  }
+
+  private getBasename(path: string): string {
+    const segments = normalizePath(path).split('/').filter((segment) => segment.length > 0);
+    const filename = segments.at(-1) ?? 'sbom.json';
+    const lastDotIndex = filename.lastIndexOf('.');
+
+    return lastDotIndex > 0 ? filename.slice(0, lastDotIndex) : filename;
   }
 
   private getString(value: unknown): string {

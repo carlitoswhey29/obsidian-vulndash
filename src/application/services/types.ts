@@ -1,4 +1,5 @@
 import type { Severity } from '../../domain/entities/Severity';
+import type { NormalizedSbomDocument } from '../../domain/sbom/types';
 
 export type DashboardSortOrder = 'publishedAt' | 'cvssScore';
 
@@ -80,6 +81,7 @@ export interface RuntimeSbomComponent {
 
 export interface RuntimeSbomState {
   components: RuntimeSbomComponent[];
+  document: NormalizedSbomDocument;
   hash: string;
   lastError: string | null;
   lastLoadedAt: number;
