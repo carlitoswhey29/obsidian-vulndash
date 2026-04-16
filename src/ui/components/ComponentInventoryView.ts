@@ -1,6 +1,7 @@
-import type { ComponentInventorySnapshot, ComponentInventoryWorkspaceSnapshot, TrackedComponent } from '../../application/sbom/types';
+import type { ComponentInventorySnapshot, ComponentInventoryWorkspaceSnapshot } from '../../application/sbom/types';
 import { ComponentFilterBar } from './ComponentFilterBar';
 import {
+  type ComponentInventoryDisplayEntry,
   createDefaultComponentInventoryFilters,
   deriveComponentInventoryState
 } from './componentInventoryState';
@@ -186,7 +187,7 @@ export class ComponentInventoryView {
 
     const { snapshot } = this.loadState;
     const inventory = snapshot.inventory;
-    const derivedState = deriveComponentInventoryState(inventory, this.filters);
+    const derivedState = deriveComponentInventoryState(snapshot, this.filters);
     this.renderSummaryReady(inventory, derivedState.components.length, derivedState.summary);
 
     if (inventory.configuredSbomCount === 0) {
@@ -237,7 +238,7 @@ export class ComponentInventoryView {
       return;
     }
 
-    this.renderTable(derivedState.components, snapshot);
+    this.renderTable(derivedState.components);
   }
 
   private renderSummaryLoading(): void {
@@ -323,8 +324,7 @@ export class ComponentInventoryView {
   }
 
   private renderTable(
-    components: readonly TrackedComponent[],
-    snapshot: ComponentInventoryWorkspaceSnapshot
+    components: readonly ComponentInventoryDisplayEntry[]
   ): void {
     const tableShell = this.resultsHostEl?.createDiv({ cls: 'vulndash-component-table-shell vulndash-card-shell' });
     if (!tableShell) {
@@ -339,8 +339,10 @@ export class ComponentInventoryView {
     }
 
     const body = table.createEl('tbody');
-    for (const component of components) {
+    for (const entry of components) {
+      const { component } = entry;
       const rowCallbacks: ComponentRowRendererCallbacks = {
+        effectiveVulnerabilityCount: entry.vulnerabilityCount,
         onDisable: (trackedComponent) => {
           void this.handlePreferenceAction(trackedComponent.key, 'disable');
         },
@@ -362,13 +364,15 @@ export class ComponentInventoryView {
           void this.handlePreferenceAction(trackedComponent.key, 'unfollow');
         }
       };
+      if (entry.highestSeverity) {
+        rowCallbacks.effectiveHighestSeverity = entry.highestSeverity;
+      }
 
       if (this.callbacks.onOpenNote) {
         rowCallbacks.onOpenNote = this.callbacks.onOpenNote;
       }
-      const relatedVulnerabilities = snapshot.relationships.vulnerabilitiesByComponent.get(component.key);
-      if (relatedVulnerabilities) {
-        rowCallbacks.relatedVulnerabilities = relatedVulnerabilities;
+      if (entry.relatedVulnerabilities.length > 0) {
+        rowCallbacks.relatedVulnerabilities = entry.relatedVulnerabilities;
       }
 
       renderComponentRow(body, component, this.expandedKeys.has(component.key), rowCallbacks);

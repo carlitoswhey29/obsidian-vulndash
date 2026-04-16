@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ComponentInventorySnapshot, TrackedComponent } from '../../../src/application/sbom/types';
+import type {
+  ComponentInventoryWorkspaceSnapshot,
+  RelatedVulnerabilitySummary,
+  TrackedComponent
+} from '../../../src/application/sbom/types';
 import {
   createDefaultComponentInventoryFilters,
   deriveComponentInventoryState,
@@ -29,22 +33,45 @@ const createComponent = (overrides: Partial<TrackedComponent> = {}): TrackedComp
   ...overrides
 });
 
-const createSnapshot = (components: TrackedComponent[]): ComponentInventorySnapshot => ({
-  catalog: {
-    componentCount: components.length,
-    components,
-    formats: ['cyclonedx', 'spdx'],
-    sourceFiles: ['reports/a.cdx.json', 'reports/b.spdx.json']
+const createRelatedVulnerability = (
+  overrides: Partial<RelatedVulnerabilitySummary> = {}
+): RelatedVulnerabilitySummary => ({
+  cvssScore: 8.1,
+  evidence: 'purl',
+  id: 'GHSA-aaaa-bbbb-cccc',
+  referenceCount: 2,
+  severity: 'HIGH',
+  source: 'GitHub',
+  title: 'Widget issue',
+  ...overrides
+});
+
+const createSnapshot = (
+  components: TrackedComponent[],
+  relationships?: Map<string, RelatedVulnerabilitySummary[]>
+): ComponentInventoryWorkspaceSnapshot => ({
+  inventory: {
+    catalog: {
+      componentCount: components.length,
+      components,
+      formats: ['cyclonedx', 'spdx'],
+      sourceFiles: ['reports/a.cdx.json', 'reports/b.spdx.json']
+    },
+    configuredSbomCount: 2,
+    enabledSbomCount: 2,
+    failedSbomCount: 0,
+    issues: [],
+    parsedSbomCount: 2
   },
-  configuredSbomCount: 2,
-  enabledSbomCount: 2,
-  failedSbomCount: 0,
-  issues: [],
-  parsedSbomCount: 2
+  relationships: {
+    componentsByVulnerability: new Map(),
+    relationships: [],
+    vulnerabilitiesByComponent: relationships ?? new Map()
+  }
 });
 
 test('filterTrackedComponents combines search, follow, enabled, vulnerability, severity, format, and source filters', () => {
-  const components = [
+  const snapshot = createSnapshot([
     createComponent({
       cweGroups: [{ count: 1, cwe: 79, vulnerabilityIds: ['CVE-2026-0001'] }],
       highestSeverity: 'high',
@@ -77,7 +104,7 @@ test('filterTrackedComponents combines search, follow, enabled, vulnerability, s
       }],
       version: '4.19.2'
     })
-  ];
+  ]);
 
   const filters = {
     ...createDefaultComponentInventoryFilters(),
@@ -90,7 +117,9 @@ test('filterTrackedComponents combines search, follow, enabled, vulnerability, s
     vulnerableOnly: true
   };
 
-  assert.deepEqual(filterTrackedComponents(components, filters).map((component) => component.name), ['lodash']);
+  const unfiltered = deriveComponentInventoryState(snapshot, createDefaultComponentInventoryFilters());
+
+  assert.deepEqual(filterTrackedComponents(unfiltered.components, filters).map((entry) => entry.component.name), ['lodash']);
 });
 
 test('deriveComponentInventoryState returns deterministic summaries and no-results visibility data', () => {
@@ -123,6 +152,30 @@ test('deriveComponentInventoryState returns deterministic summaries and no-resul
   assert.equal(derived.summary.enabledCount, 1);
   assert.equal(derived.summary.vulnerableCount, 1);
   assert.equal(derived.hasActiveFilters, true);
-  assert.deepEqual(derived.components.map((component) => component.name), ['lodash']);
+  assert.deepEqual(derived.components.map((entry) => entry.component.name), ['lodash']);
   assert.deepEqual(derived.availableSourceFiles, ['reports/a.cdx.json', 'reports/b.spdx.json']);
+});
+
+test('deriveComponentInventoryState counts linked vulnerabilities even when the SBOM component has none embedded', () => {
+  const snapshot = createSnapshot([
+    createComponent({
+      key: 'purl:pkg:npm/widget@1.2.3',
+      name: 'widget',
+      purl: 'pkg:npm/widget@1.2.3',
+      version: '1.2.3'
+    })
+  ], new Map([
+    ['purl:pkg:npm/widget@1.2.3', [createRelatedVulnerability()]]
+  ]));
+
+  const derived = deriveComponentInventoryState(snapshot, {
+    ...createDefaultComponentInventoryFilters(),
+    searchQuery: 'ghsa-aaaa-bbbb-cccc',
+    vulnerableOnly: true
+  });
+
+  assert.equal(derived.summary.vulnerableCount, 1);
+  assert.equal(derived.components[0]?.vulnerabilityCount, 1);
+  assert.equal(derived.components[0]?.highestSeverity, 'high');
+  assert.deepEqual(derived.components.map((entry) => entry.component.name), ['widget']);
 });

@@ -2,6 +2,8 @@ import type { RelatedVulnerabilitySummary, TrackedComponent } from '../../applic
 import { renderComponentDetailPanel, type ComponentDetailPanelCallbacks } from './ComponentDetailPanel';
 
 export interface ComponentRowRendererCallbacks extends ComponentDetailPanelCallbacks {
+  effectiveHighestSeverity?: string;
+  effectiveVulnerabilityCount: number;
   onDisable: (component: TrackedComponent) => void;
   onEnable: (component: TrackedComponent) => void;
   onFollow: (component: TrackedComponent) => void;
@@ -13,7 +15,11 @@ export interface ComponentRowRendererCallbacks extends ComponentDetailPanelCallb
 const formatSeverity = (severity: string | undefined): string =>
   severity ? `${severity.charAt(0).toUpperCase()}${severity.slice(1)}` : 'None';
 
-const getRowClasses = (component: TrackedComponent, expanded: boolean): string[] => {
+const getRowClasses = (
+  component: TrackedComponent,
+  expanded: boolean,
+  vulnerabilityCount: number
+): string[] => {
   const classes = ['vulndash-component-row'];
 
   if (expanded) {
@@ -25,7 +31,7 @@ const getRowClasses = (component: TrackedComponent, expanded: boolean): string[]
   if (component.isFollowed) {
     classes.push('is-followed');
   }
-  if (component.vulnerabilityCount > 0) {
+  if (vulnerabilityCount > 0) {
     classes.push('is-vulnerable');
   }
 
@@ -49,8 +55,10 @@ export const renderComponentRow = (
   expanded: boolean,
   callbacks: ComponentRowRendererCallbacks
 ): void => {
+  const effectiveVulnerabilityCount = callbacks.effectiveVulnerabilityCount;
+  const effectiveHighestSeverity = callbacks.effectiveHighestSeverity ?? component.highestSeverity;
   const row = tableBodyEl.createEl('tr', {
-    cls: getRowClasses(component, expanded).join(' ')
+    cls: getRowClasses(component, expanded, effectiveVulnerabilityCount).join(' ')
   });
 
   const nameCell = row.createEl('td');
@@ -87,10 +95,10 @@ export const renderComponentRow = (
 
   const vulnerabilityCell = row.createEl('td');
   const vulnerabilityStack = vulnerabilityCell.createDiv({ cls: 'vulndash-component-vuln-stack' });
-  vulnerabilityStack.createSpan({ text: String(component.vulnerabilityCount) });
+  vulnerabilityStack.createSpan({ text: String(effectiveVulnerabilityCount) });
   vulnerabilityStack.createSpan({
-    cls: `vulndash-severity-pill is-${component.highestSeverity ?? 'none'}`,
-    text: formatSeverity(component.highestSeverity)
+    cls: `vulndash-severity-pill is-${effectiveHighestSeverity ?? 'none'}`,
+    text: formatSeverity(effectiveHighestSeverity)
   });
 
   const actionsCell = row.createEl('td');
@@ -155,6 +163,9 @@ export const renderComponentRow = (
   }
   if (callbacks.relatedVulnerabilities) {
     detailCallbacks.relatedVulnerabilities = callbacks.relatedVulnerabilities;
+  }
+  if (effectiveHighestSeverity) {
+    detailCallbacks.effectiveHighestSeverity = effectiveHighestSeverity;
   }
 
   renderComponentDetailPanel(detailsCell, component, detailCallbacks);

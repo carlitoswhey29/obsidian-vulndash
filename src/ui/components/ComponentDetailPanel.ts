@@ -2,6 +2,7 @@ import type { RelatedVulnerabilitySummary, TrackedComponent } from '../../applic
 import { sanitizeText, sanitizeUrl } from '../../infrastructure/utils/sanitize';
 
 export interface ComponentDetailPanelCallbacks {
+  effectiveHighestSeverity?: string;
   onOpenNote?: (notePath: string) => void;
   relatedVulnerabilities?: readonly RelatedVulnerabilitySummary[];
 }
@@ -45,7 +46,7 @@ export const renderComponentDetailPanel = (
   renderField(summaryGrid, 'License', component.license ?? 'Unknown');
   renderField(summaryGrid, 'PURL', component.purl ?? 'None', { mono: true, multiline: true });
   renderField(summaryGrid, 'CPE', component.cpe ?? 'None', { mono: true, multiline: true });
-  renderField(summaryGrid, 'Highest Severity', formatSeverity(component.highestSeverity));
+  renderField(summaryGrid, 'Highest Severity', formatSeverity(callbacks.effectiveHighestSeverity ?? component.highestSeverity));
 
   const cweSection = containerEl.createDiv({ cls: 'vulndash-component-detail-section' });
   cweSection.createEl('h4', { text: 'CWE Groups' });
