@@ -2,11 +2,20 @@ import { normalizePath } from 'obsidian';
 import { parseSbomJson } from '../../domain/sbom/parser';
 import type { NormalizedSbomDocument } from '../../domain/sbom/types';
 import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
+import type { ComponentNoteLookupInput } from '../sbom/ComponentNotePathResolver';
 import type { ImportedSbomConfig, RuntimeSbomComponent, RuntimeSbomState, VulnDashSettings } from './types';
 
 interface SbomReader {
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<string>;
+}
+
+export interface SbomComponentNotePathResolver {
+  resolve(component: ComponentNoteLookupInput): string | null;
+}
+
+export interface SbomComponentNotePathResolverFactory {
+  createResolver(): SbomComponentNotePathResolver;
 }
 
 export interface SbomLoadSuccessResult {
@@ -47,20 +56,33 @@ export type SbomValidationResult = SbomValidationSuccessResult | SbomValidationF
 
 export class SbomImportService {
   private readonly nameNormalizer: ProductNameNormalizer;
+  private readonly notePathResolverFactory: SbomComponentNotePathResolverFactory | null;
   private readonly reader: SbomReader;
   private readonly runtimeCache = new Map<string, RuntimeSbomState>();
 
-  public constructor(reader: SbomReader, nameNormalizer = new ProductNameNormalizer()) {
+  public constructor(
+    reader: SbomReader,
+    nameNormalizer = new ProductNameNormalizer(),
+    notePathResolverFactory: SbomComponentNotePathResolverFactory | null = null
+  ) {
     this.reader = reader;
     this.nameNormalizer = nameNormalizer;
+    this.notePathResolverFactory = notePathResolverFactory;
   }
 
   public async loadAllSboms(settings: Pick<VulnDashSettings, 'sboms'>): Promise<SbomLoadResult[]> {
     const enabledSboms = settings.sboms.filter((sbom) => sbom.enabled);
-    return Promise.all(enabledSboms.map((sbom) => this.loadSbom(sbom)));
+    const notePathResolver = this.createNotePathResolver();
+    return Promise.all(enabledSboms.map((sbom) => this.loadSbom(sbom, { notePathResolver })));
   }
 
-  public async loadSbom(config: ImportedSbomConfig, options?: { force?: boolean }): Promise<SbomLoadResult> {
+  public async loadSbom(
+    config: ImportedSbomConfig,
+    options?: {
+      force?: boolean;
+      notePathResolver?: SbomComponentNotePathResolver | null;
+    }
+  ): Promise<SbomLoadResult> {
     const normalizedPath = this.normalizeSbomPath(config.path);
     const cached = this.runtimeCache.get(config.id) ?? null;
 
@@ -84,7 +106,7 @@ export class SbomImportService {
 
     try {
       const raw = await this.reader.read(normalizedPath);
-      const parsed = this.parseSbom(raw, normalizedPath);
+      const parsed = this.parseSbom(raw, normalizedPath, options?.notePathResolver ?? this.createNotePathResolver());
       const state: RuntimeSbomState = {
         components: this.extractComponents(parsed),
         document: parsed,
@@ -121,6 +143,10 @@ export class SbomImportService {
 
   public invalidateCache(sbomId: string): void {
     this.runtimeCache.delete(sbomId);
+  }
+
+  public invalidateAllCaches(): void {
+    this.runtimeCache.clear();
   }
 
   public async getFileChangeStatus(config: ImportedSbomConfig): Promise<SbomFileChangeStatus> {
@@ -188,7 +214,7 @@ export class SbomImportService {
       }
 
       const raw = await this.reader.read(normalizedPath);
-      const parsed = this.parseSbom(raw, normalizedPath);
+      const parsed = this.parseSbom(raw, normalizedPath, null);
 
       return {
         componentCount: parsed.components.length,
@@ -204,18 +230,33 @@ export class SbomImportService {
     }
   }
 
-  private parseSbom(raw: string, sourcePath: string): NormalizedSbomDocument {
+  private parseSbom(
+    raw: string,
+    sourcePath: string,
+    notePathResolver: SbomComponentNotePathResolver | null
+  ): NormalizedSbomDocument {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object') {
       throw new Error('SBOM file is not a valid JSON object.');
     }
 
     return parseSbomJson(parsed, {
+      ...(notePathResolver ? {
+        resolveNotePath: (component) => notePathResolver.resolve(component)
+      } : {}),
       source: {
         basename: this.getBasename(sourcePath),
         path: sourcePath
       }
     });
+  }
+
+  private createNotePathResolver(): SbomComponentNotePathResolver | null {
+    if (!this.notePathResolverFactory) {
+      return null;
+    }
+
+    return this.notePathResolverFactory.createResolver();
   }
 
   private extractComponents(document: NormalizedSbomDocument): RuntimeSbomComponent[] {

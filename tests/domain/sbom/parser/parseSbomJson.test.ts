@@ -134,6 +134,33 @@ test('parses SPDX package metadata including purl and cpe external references', 
   assert.equal(document.components[0]?.vulnerabilityCount, 0);
 });
 
+test('applies resolveNotePath results while parsing component documents', () => {
+  const document = parseSbomJson({
+    SPDXID: 'SPDXRef-DOCUMENT',
+    packages: [
+      {
+        SPDXID: 'SPDXRef-Package-portal-web',
+        externalRefs: [
+          {
+            referenceLocator: 'pkg:npm/portal-web@1.2.3',
+            referenceType: 'purl'
+          }
+        ],
+        name: 'portal-web',
+        versionInfo: '1.2.3'
+      }
+    ],
+    spdxVersion: 'SPDX-2.3'
+  }, {
+    resolveNotePath: (component) => component.purl === 'pkg:npm/portal-web@1.2.3'
+      ? 'Components/Portal Web.md'
+      : null,
+    source: createSource('reports/demo.spdx.json')
+  });
+
+  assert.equal(document.components[0]?.notePath, 'Components/Portal Web.md');
+});
+
 test('throws a clear error for unsupported JSON documents', () => {
   assert.throws(() => parseSbomJson({
     hello: 'world'

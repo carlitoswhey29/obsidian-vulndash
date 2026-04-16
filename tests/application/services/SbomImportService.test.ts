@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SbomImportService } from '../../../src/application/services/SbomImportService';
+import {
+  SbomImportService,
+  type SbomComponentNotePathResolverFactory
+} from '../../../src/application/services/SbomImportService';
 import type { ImportedSbomConfig } from '../../../src/application/services/types';
 
 class InMemorySbomReader {
@@ -34,6 +37,39 @@ class MutableSbomReader extends InMemorySbomReader {
 
   public delete(path: string): void {
     delete this.mutableFiles[path];
+  }
+}
+
+class StaticNotePathResolverFactory implements SbomComponentNotePathResolverFactory {
+  public constructor(
+    private readonly notePathByKey: Record<string, string>
+  ) {}
+
+  public createResolver() {
+    return {
+      resolve: (component: {
+        cpe?: string;
+        name: string;
+        purl?: string;
+        version?: string;
+      }): string | null => {
+        const keys = [
+          component.purl ? `purl:${component.purl.toLowerCase()}` : '',
+          component.cpe ? `cpe:${component.cpe.toLowerCase()}` : '',
+          component.version ? `name-version:${component.name.toLowerCase()}@${component.version.toLowerCase()}` : '',
+          `name:${component.name.toLowerCase()}`
+        ].filter(Boolean);
+
+        for (const key of keys) {
+          const notePath = this.notePathByKey[key];
+          if (notePath) {
+            return notePath;
+          }
+        }
+
+        return null;
+      }
+    };
   }
 }
 
@@ -115,6 +151,45 @@ test('loads SPDX package metadata through the shared parser', async () => {
   assert.equal(result.state.document.format, 'spdx');
   assert.equal(result.state.document.components[0]?.purl, 'pkg:npm/portal-web@1.2.3');
   assert.equal(result.state.components[0]?.normalizedName, 'Portal Web');
+});
+
+test('resolves component note paths during SBOM import when a resolver factory is configured', async () => {
+  const service = new SbomImportService(
+    new InMemorySbomReader({
+      'reports/sbom.spdx.json': JSON.stringify({
+        SPDXID: 'SPDXRef-DOCUMENT',
+        packages: [
+          {
+            SPDXID: 'SPDXRef-Package-portal-web',
+            externalRefs: [
+              {
+                referenceLocator: 'pkg:npm/portal-web@1.2.3',
+                referenceType: 'purl'
+              }
+            ],
+            name: 'portal-web',
+            versionInfo: '1.2.3'
+          }
+        ],
+        spdxVersion: 'SPDX-2.3'
+      })
+    }),
+    undefined,
+    new StaticNotePathResolverFactory({
+      'purl:pkg:npm/portal-web@1.2.3': 'Components/Portal Web.md'
+    })
+  );
+
+  const result = await service.loadSbom(createSbomConfig({
+    path: 'reports/sbom.spdx.json'
+  }));
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.state.document.components[0]?.notePath, 'Components/Portal Web.md');
 });
 
 test('returns cached runtime data when a later forced load fails', async () => {

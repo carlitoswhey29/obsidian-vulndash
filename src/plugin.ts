@@ -2,6 +2,7 @@ import {
   Notice,
   normalizePath,
   Plugin,
+  TAbstractFile,
   TFile,
   WorkspaceLeaf
 } from 'obsidian';
@@ -42,6 +43,7 @@ import type { Vulnerability } from './domain/entities/Vulnerability';
 import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
 import { HttpClient } from './infrastructure/clients/common/HttpClient';
 import { buildVulnerabilityNoteBody } from './infrastructure/obsidian/VulnerabilityNote';
+import { ComponentNoteResolverFactory } from './infrastructure/obsidian/ComponentNoteResolverFactory';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
 import { VulnDashSettingTab } from './infrastructure/obsidian/VulnDashSettingsTab';
 import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from './infrastructure/utils/crypto';
@@ -417,6 +419,7 @@ export default class VulnDashPlugin extends Plugin {
   public override async onload(): Promise<void> {
     await this.loadSettings();
     await this.recomputeFilters();
+    this.registerMarkdownNotePathObservers();
 
     this.registerView(VULNDASH_VIEW_TYPE, (leaf) =>
       new VulnDashView(
@@ -1201,8 +1204,45 @@ export default class VulnDashPlugin extends Plugin {
 
   private getSbomImportService(): SbomImportService {
     if (!this.sbomImportService) {
-      this.sbomImportService = new SbomImportService(this.app.vault.adapter);
+      this.sbomImportService = new SbomImportService(
+        this.app.vault.adapter,
+        undefined,
+        new ComponentNoteResolverFactory(this.app.vault, this.app.metadataCache)
+      );
     }
     return this.sbomImportService;
+  }
+
+  private registerMarkdownNotePathObservers(): void {
+    const invalidateComponentNotePaths = (): void => {
+      this.getSbomImportService().invalidateAllCaches();
+      this.updateViewSettings();
+    };
+
+    const shouldInvalidateForFile = (file: TFile): boolean =>
+      file.extension.toLowerCase() === 'md';
+    const shouldInvalidateForAbstractFile = (file: TAbstractFile): boolean =>
+      file instanceof TFile && shouldInvalidateForFile(file);
+
+    this.registerEvent(this.app.vault.on('create', (file) => {
+      if (shouldInvalidateForAbstractFile(file)) {
+        invalidateComponentNotePaths();
+      }
+    }));
+    this.registerEvent(this.app.vault.on('modify', (file) => {
+      if (shouldInvalidateForAbstractFile(file)) {
+        invalidateComponentNotePaths();
+      }
+    }));
+    this.registerEvent(this.app.vault.on('delete', (file) => {
+      if (shouldInvalidateForAbstractFile(file)) {
+        invalidateComponentNotePaths();
+      }
+    }));
+    this.registerEvent(this.app.vault.on('rename', (file) => {
+      if (shouldInvalidateForAbstractFile(file)) {
+        invalidateComponentNotePaths();
+      }
+    }));
   }
 }
