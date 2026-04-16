@@ -1,5 +1,4 @@
-import type { ComponentInventorySnapshot } from '../../application/sbom/types';
-import type { TrackedComponent } from '../../application/sbom/types';
+import type { ComponentInventorySnapshot, ComponentInventoryWorkspaceSnapshot, TrackedComponent } from '../../application/sbom/types';
 import { ComponentFilterBar } from './ComponentFilterBar';
 import {
   createDefaultComponentInventoryFilters,
@@ -8,7 +7,7 @@ import {
 import { renderComponentRow, type ComponentRowRendererCallbacks } from './ComponentRowRenderer';
 
 export interface ComponentInventoryViewCallbacks {
-  loadSnapshot: () => Promise<ComponentInventorySnapshot>;
+  loadSnapshot: () => Promise<ComponentInventoryWorkspaceSnapshot>;
   onDisableComponent: (componentKey: string) => Promise<void>;
   onEnableComponent: (componentKey: string) => Promise<void>;
   onFollowComponent: (componentKey: string) => Promise<void>;
@@ -18,7 +17,7 @@ export interface ComponentInventoryViewCallbacks {
 
 type InventoryLoadState =
   | { status: 'idle' | 'loading' }
-  | { snapshot: ComponentInventorySnapshot; status: 'ready' }
+  | { snapshot: ComponentInventoryWorkspaceSnapshot; status: 'ready' }
   | { message: string; status: 'error' };
 
 export class ComponentInventoryView {
@@ -112,7 +111,7 @@ export class ComponentInventoryView {
         return;
       }
 
-      const availableKeys = new Set(snapshot.catalog.components.map((component) => component.key));
+      const availableKeys = new Set(snapshot.inventory.catalog.components.map((component) => component.key));
       for (const expandedKey of Array.from(this.expandedKeys)) {
         if (!availableKeys.has(expandedKey)) {
           this.expandedKeys.delete(expandedKey);
@@ -149,8 +148,8 @@ export class ComponentInventoryView {
 
     const snapshot = this.loadState.status === 'ready' ? this.loadState.snapshot : null;
     this.filterBar.render(this.filterHostEl, {
-      availableFormats: snapshot?.catalog.formats ?? [],
-      availableSourceFiles: snapshot?.catalog.sourceFiles ?? [],
+      availableFormats: snapshot?.inventory.catalog.formats ?? [],
+      availableSourceFiles: snapshot?.inventory.catalog.sourceFiles ?? [],
       filters: this.filters
     });
   }
@@ -186,10 +185,11 @@ export class ComponentInventoryView {
     }
 
     const { snapshot } = this.loadState;
-    const derivedState = deriveComponentInventoryState(snapshot, this.filters);
-    this.renderSummaryReady(snapshot, derivedState.components.length, derivedState.summary);
+    const inventory = snapshot.inventory;
+    const derivedState = deriveComponentInventoryState(inventory, this.filters);
+    this.renderSummaryReady(inventory, derivedState.components.length, derivedState.summary);
 
-    if (snapshot.configuredSbomCount === 0) {
+    if (inventory.configuredSbomCount === 0) {
       this.renderStateCard({
         body: 'Add one or more SBOM files in the SBOM manager to build a merged component inventory.',
         title: 'No SBOM files configured'
@@ -197,7 +197,7 @@ export class ComponentInventoryView {
       return;
     }
 
-    if (snapshot.enabledSbomCount === 0) {
+    if (inventory.enabledSbomCount === 0) {
       this.renderStateCard({
         body: 'The configured SBOM files are all disabled. Enable at least one source to populate the inventory.',
         title: 'No enabled SBOM sources'
@@ -205,17 +205,17 @@ export class ComponentInventoryView {
       return;
     }
 
-    if (snapshot.catalog.componentCount === 0 && snapshot.failedSbomCount > 0) {
+    if (inventory.catalog.componentCount === 0 && inventory.failedSbomCount > 0) {
       this.renderStateCard({
         body: 'Enabled SBOM files could not be parsed into a usable component inventory. Review the failures below and resync after fixing the source files.',
         tone: 'error',
         title: 'No components could be loaded'
       });
-      this.renderIssues(snapshot);
+      this.renderIssues(inventory);
       return;
     }
 
-    if (snapshot.catalog.componentCount === 0) {
+    if (inventory.catalog.componentCount === 0) {
       this.renderStateCard({
         body: 'Enabled SBOM files were loaded, but no components were found.',
         title: 'No components detected'
@@ -223,8 +223,8 @@ export class ComponentInventoryView {
       return;
     }
 
-    if (snapshot.issues.length > 0) {
-      this.renderIssues(snapshot);
+    if (inventory.issues.length > 0) {
+      this.renderIssues(inventory);
     }
 
     if (derivedState.components.length === 0) {
@@ -237,7 +237,7 @@ export class ComponentInventoryView {
       return;
     }
 
-    this.renderTable(derivedState.components);
+    this.renderTable(derivedState.components, snapshot);
   }
 
   private renderSummaryLoading(): void {
@@ -322,7 +322,10 @@ export class ComponentInventoryView {
     }
   }
 
-  private renderTable(components: readonly TrackedComponent[]): void {
+  private renderTable(
+    components: readonly TrackedComponent[],
+    snapshot: ComponentInventoryWorkspaceSnapshot
+  ): void {
     const tableShell = this.resultsHostEl?.createDiv({ cls: 'vulndash-component-table-shell vulndash-card-shell' });
     if (!tableShell) {
       return;
@@ -362,6 +365,10 @@ export class ComponentInventoryView {
 
       if (this.callbacks.onOpenNote) {
         rowCallbacks.onOpenNote = this.callbacks.onOpenNote;
+      }
+      const relatedVulnerabilities = snapshot.relationships.vulnerabilitiesByComponent.get(component.key);
+      if (relatedVulnerabilities) {
+        rowCallbacks.relatedVulnerabilities = relatedVulnerabilities;
       }
 
       renderComponentRow(body, component, this.expandedKeys.has(component.key), rowCallbacks);

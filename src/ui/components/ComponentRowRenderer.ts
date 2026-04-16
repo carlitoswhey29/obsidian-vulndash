@@ -1,10 +1,11 @@
-import type { TrackedComponent } from '../../application/sbom/types';
+import type { RelatedVulnerabilitySummary, TrackedComponent } from '../../application/sbom/types';
 import { renderComponentDetailPanel, type ComponentDetailPanelCallbacks } from './ComponentDetailPanel';
 
 export interface ComponentRowRendererCallbacks extends ComponentDetailPanelCallbacks {
   onDisable: (component: TrackedComponent) => void;
   onEnable: (component: TrackedComponent) => void;
   onFollow: (component: TrackedComponent) => void;
+  relatedVulnerabilities?: readonly RelatedVulnerabilitySummary[];
   onToggleExpanded: (componentKey: string, expanded: boolean) => void;
   onUnfollow: (component: TrackedComponent) => void;
 }
@@ -151,6 +152,9 @@ export const renderComponentRow = (
   const detailCallbacks: ComponentDetailPanelCallbacks = {};
   if (callbacks.onOpenNote) {
     detailCallbacks.onOpenNote = callbacks.onOpenNote;
+  }
+  if (callbacks.relatedVulnerabilities) {
+    detailCallbacks.relatedVulnerabilities = callbacks.relatedVulnerabilities;
   }
 
   renderComponentDetailPanel(detailsCell, component, detailCallbacks);

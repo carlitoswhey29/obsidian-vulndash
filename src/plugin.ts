@@ -2,12 +2,20 @@ import {
   Notice,
   normalizePath,
   Plugin,
+  TFile,
   WorkspaceLeaf
 } from 'obsidian';
+import { ComponentBacklinkService } from './application/sbom/ComponentBacklinkService';
 import { ComponentInventoryService } from './application/sbom/ComponentInventoryService';
 import { ComponentPreferenceService } from './application/sbom/ComponentPreferenceService';
+import { ComponentVulnerabilityLinkService } from './application/sbom/ComponentVulnerabilityLinkService';
+import { RelationshipNormalizer } from './application/sbom/RelationshipNormalizer';
 import { SbomCatalogService } from './application/sbom/SbomCatalogService';
-import type { ComponentCatalog, ComponentInventorySnapshot } from './application/sbom/types';
+import type {
+  ComponentCatalog,
+  ComponentInventorySnapshot,
+  ComponentInventoryWorkspaceSnapshot
+} from './application/sbom/types';
 import { AlertEngine } from './application/services/AlertEngine';
 import { buildFeedsFromConfig } from './application/services/FeedFactory';
 import { PollingOrchestrator } from './application/services/PollingOrchestrator';
@@ -392,14 +400,18 @@ export default class VulnDashPlugin extends Plugin {
   private stopPolling: (() => void) | null = null;
   private pollingEnabled = false;
   private readonly alertEngine = new AlertEngine();
+  private readonly componentBacklinkService = new ComponentBacklinkService();
   private readonly componentInventoryService = new ComponentInventoryService();
   private readonly componentPreferenceService = componentPreferenceService;
+  private readonly componentVulnerabilityLinkService = new ComponentVulnerabilityLinkService();
+  private readonly relationshipNormalizer = new RelationshipNormalizer();
   private readonly sbomCatalogService = new SbomCatalogService();
   private readonly sbomComparisonService = new SbomComparisonService();
   private readonly sbomFilterMergeService = new SbomFilterMergeService();
   private sbomImportService: SbomImportService | null = null;
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
+  private visibleVulnerabilities: Vulnerability[] = [];
   private previousVisibleIds = new Set<string>();
 
   public override async onload(): Promise<void> {
@@ -418,7 +430,8 @@ export default class VulnDashPlugin extends Plugin {
           disableComponent: async (componentKey) => this.disableSbomComponent(componentKey),
           enableComponent: async (componentKey) => this.enableSbomComponent(componentKey),
           followComponent: async (componentKey) => this.followSbomComponent(componentKey),
-          loadComponentInventory: async () => this.getComponentInventorySnapshot(),
+          loadComponentInventory: async () => this.getComponentInventoryWorkspaceSnapshot(),
+          openNotePath: async (notePath) => this.openNotePath(notePath),
           unfollowComponent: async (componentKey) => this.unfollowSbomComponent(componentKey)
         }
       )
@@ -719,6 +732,19 @@ export default class VulnDashPlugin extends Plugin {
     return this.componentInventoryService.buildSnapshot(this.settings, loadResults);
   }
 
+  public async getComponentInventoryWorkspaceSnapshot(): Promise<ComponentInventoryWorkspaceSnapshot> {
+    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
+    const inventory = this.componentInventoryService.buildSnapshot(this.settings, loadResults);
+
+    return {
+      inventory,
+      relationships: this.componentVulnerabilityLinkService.buildGraph(
+        inventory.catalog.components,
+        this.visibleVulnerabilities
+      )
+    };
+  }
+
   public async getSbomComponents(sbomId: string): Promise<ResolvedSbomComponent[] | null> {
     const sbom = this.getSbomById(sbomId);
     if (!sbom) {
@@ -807,6 +833,7 @@ export default class VulnDashPlugin extends Plugin {
     const filtered = this.alertEngine.filter(vulnerabilities, this.settings);
     const diagnostics = buildVisibilityDiagnostics(vulnerabilities, filtered);
     console.info('[vulndash.filter.visibility]', diagnostics);
+    this.visibleVulnerabilities = filtered;
     this.updateView(filtered);
     await this.notifyOnNewItems(filtered);
   }
@@ -871,16 +898,51 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     await this.ensureFolder(this.settings.autoNoteFolder);
+    const workspaceSnapshot = await this.getComponentInventoryWorkspaceSnapshot();
 
     for (const vulnerability of vulnerabilities) {
-      const safeId = vulnerability.id.replace(/[^A-Za-z0-9._-]/g, '-');
-      const notePath = normalizePath(`${this.settings.autoNoteFolder}/${safeId}.md`);
+      const notePath = this.getVulnerabilityNotePath(vulnerability);
       const exists = await this.app.vault.adapter.exists(notePath);
-      if (exists) {
+      const vulnerabilityRef = this.relationshipNormalizer.buildVulnerabilityRef(vulnerability);
+      const noteRelationships = this.componentBacklinkService.buildVulnerabilityNoteContext(
+        vulnerabilityRef,
+        workspaceSnapshot.relationships
+      );
+
+      if (!exists) {
+        await this.app.vault.create(notePath, buildVulnerabilityNoteBody(vulnerability, noteRelationships));
+      }
+
+      await this.syncComponentNoteBacklinks(notePath, vulnerability, noteRelationships.relatedComponentNotePaths);
+    }
+  }
+
+  private getVulnerabilityNotePath(vulnerability: Vulnerability): string {
+    const safeId = vulnerability.id.replace(/[^A-Za-z0-9._-]/g, '-');
+    return normalizePath(`${this.settings.autoNoteFolder}/${safeId}.md`);
+  }
+
+  private async syncComponentNoteBacklinks(
+    vulnerabilityNotePath: string,
+    vulnerability: Vulnerability,
+    componentNotePaths: readonly string[]
+  ): Promise<void> {
+    for (const componentNotePath of componentNotePaths) {
+      const normalizedPath = normalizePath(componentNotePath);
+      const exists = await this.app.vault.adapter.exists(normalizedPath);
+      if (!exists) {
         continue;
       }
 
-      await this.app.vault.create(notePath, buildVulnerabilityNoteBody(vulnerability));
+      const currentContent = await this.app.vault.adapter.read(normalizedPath);
+      const nextContent = this.componentBacklinkService.upsertRelatedVulnerabilitySection(currentContent, [{
+        label: vulnerability.id,
+        notePath: vulnerabilityNotePath
+      }]);
+
+      if (nextContent !== currentContent) {
+        await this.app.vault.adapter.write(normalizedPath, nextContent);
+      }
     }
   }
 
@@ -975,6 +1037,20 @@ export default class VulnDashPlugin extends Plugin {
         view.setSettings(this.settings);
       }
     }
+  }
+
+  private async openNotePath(notePath: string): Promise<void> {
+    const normalized = normalizePath(notePath);
+    const target = this.app.vault.getAbstractFileByPath(normalized);
+
+    if (!(target instanceof TFile)) {
+      new Notice(`Note not found: ${normalized}`);
+      return;
+    }
+
+    const leaf = this.app.workspace.getLeaf(true);
+    await leaf.openFile(target);
+    this.app.workspace.revealLeaf(leaf);
   }
 
   private async activateView(): Promise<void> {

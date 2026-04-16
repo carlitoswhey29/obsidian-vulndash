@@ -1,8 +1,9 @@
-import type { TrackedComponent } from '../../application/sbom/types';
+import type { RelatedVulnerabilitySummary, TrackedComponent } from '../../application/sbom/types';
 import { sanitizeText, sanitizeUrl } from '../../infrastructure/utils/sanitize';
 
 export interface ComponentDetailPanelCallbacks {
   onOpenNote?: (notePath: string) => void;
+  relatedVulnerabilities?: readonly RelatedVulnerabilitySummary[];
 }
 
 const formatSeverity = (severity: string | undefined): string =>
@@ -62,11 +63,46 @@ export const renderComponentDetailPanel = (
 
   const vulnerabilitySection = containerEl.createDiv({ cls: 'vulndash-component-detail-section' });
   vulnerabilitySection.createEl('h4', { text: 'Vulnerability Summary' });
-  if (component.vulnerabilities.length === 0) {
+  const relatedVulnerabilities = callbacks.relatedVulnerabilities ?? [];
+  const relatedIds = new Set(relatedVulnerabilities.map((vulnerability) => vulnerability.id.trim().toLowerCase()));
+  const embeddedOnlyVulnerabilities = component.vulnerabilities.filter((vulnerability) =>
+    !relatedIds.has(vulnerability.id.trim().toLowerCase())
+  );
+
+  if (relatedVulnerabilities.length === 0 && embeddedOnlyVulnerabilities.length === 0) {
     vulnerabilitySection.createEl('p', { cls: 'vulndash-muted-copy', text: 'No vulnerability data is present for this component.' });
   } else {
     const vulnerabilityList = vulnerabilitySection.createDiv({ cls: 'vulndash-component-vulnerability-list' });
-    for (const vulnerability of component.vulnerabilities.slice(0, 10)) {
+    for (const vulnerability of relatedVulnerabilities.slice(0, 10)) {
+      const item = vulnerabilityList.createDiv({ cls: 'vulndash-component-vulnerability-item' });
+      const header = item.createDiv({ cls: 'vulndash-component-vulnerability-header' });
+      header.createSpan({ cls: 'vulndash-component-vulnerability-id', text: sanitizeText(vulnerability.id) });
+      header.createSpan({
+        cls: `vulndash-severity-pill is-${vulnerability.severity.toLowerCase()}`,
+        text: vulnerability.severity
+      });
+
+      const meta = item.createDiv({ cls: 'vulndash-muted-copy' });
+      meta.setText([
+        vulnerability.source,
+        `CVSS ${vulnerability.cvssScore.toFixed(1)}`,
+        `${vulnerability.referenceCount} reference${vulnerability.referenceCount === 1 ? '' : 's'}`,
+        vulnerability.evidence
+      ].join(' • '));
+      item.createEl('p', {
+        cls: 'vulndash-component-vulnerability-description',
+        text: sanitizeText(vulnerability.title)
+      });
+
+      if (vulnerability.notePath && callbacks.onOpenNote) {
+        const noteButton = item.createEl('button', { text: 'Open Note' });
+        noteButton.addEventListener('click', () => {
+          callbacks.onOpenNote?.(vulnerability.notePath!);
+        });
+      }
+    }
+
+    for (const vulnerability of embeddedOnlyVulnerabilities.slice(0, 10)) {
       const item = vulnerabilityList.createDiv({ cls: 'vulndash-component-vulnerability-item' });
       const header = item.createDiv({ cls: 'vulndash-component-vulnerability-header' });
       header.createSpan({ cls: 'vulndash-component-vulnerability-id', text: sanitizeText(vulnerability.id) });
@@ -100,10 +136,11 @@ export const renderComponentDetailPanel = (
       }
     }
 
-    if (component.vulnerabilities.length > 10) {
+    const hiddenCount = Math.max(relatedVulnerabilities.length - 10, 0) + Math.max(embeddedOnlyVulnerabilities.length - 10, 0);
+    if (hiddenCount > 0) {
       vulnerabilitySection.createEl('p', {
         cls: 'vulndash-muted-copy',
-        text: `${component.vulnerabilities.length - 10} additional vulnerabilities are hidden in this summary.`
+        text: `${hiddenCount} additional vulnerabilities are hidden in this summary.`
       });
     }
   }

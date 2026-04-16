@@ -967,6 +967,16 @@
   border-color: color-mix(in srgb, var(--text-error) 30%, transparent);
 }
 
+.vulndash-related-components-section {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.vulndash-related-components-section p {
+  margin: 0;
+}
+
 .vulndash-input-saving {
   outline: 1px solid var(--interactive-accent);
   opacity: 0.9;

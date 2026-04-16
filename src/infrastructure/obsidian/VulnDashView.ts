@@ -1,8 +1,9 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
+import type { ComponentInventoryWorkspaceSnapshot, RelatedComponentSummary } from '../../application/sbom/types';
 import type { DashboardSortOrder, VulnDashSettings } from '../../application/services/types';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { severityOrder } from '../../domain/entities/Severity';
-import { ComponentInventoryView, type ComponentInventoryViewCallbacks } from '../../ui/components/ComponentInventoryView';
+import { ComponentInventoryView } from '../../ui/components/ComponentInventoryView';
 import { sanitizeText } from '../utils/sanitize';
 
 export const VULNDASH_VIEW_TYPE = 'vulndash-dashboard-view';
@@ -12,6 +13,8 @@ type VulnDashTab = 'components' | 'vulnerabilities';
 
 export class VulnDashView extends ItemView {
   private activeTab: VulnDashTab = 'vulnerabilities';
+  private componentWorkspaceDirty = true;
+  private componentWorkspaceSnapshot: ComponentInventoryWorkspaceSnapshot | null = null;
   private readonly componentInventoryView: ComponentInventoryView;
   private componentPanelEl: HTMLDivElement | null = null;
   private vulnerabilityPanelEl: HTMLDivElement | null = null;
@@ -32,6 +35,8 @@ export class VulnDashView extends ItemView {
   };
   private localSearchQuery = '';
   private filterDebounceHandle: number | null = null;
+  private readonly loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
+  private readonly openNotePath: (notePath: string) => Promise<void>;
   private pollingButton: HTMLButtonElement | null = null;
   private tabButtons = new Map<VulnDashTab, HTMLButtonElement>();
   private vulnerabilityRenderToken = 0;
@@ -45,16 +50,22 @@ export class VulnDashView extends ItemView {
       disableComponent: (componentKey: string) => Promise<void>;
       enableComponent: (componentKey: string) => Promise<void>;
       followComponent: (componentKey: string) => Promise<void>;
-      loadComponentInventory: ComponentInventoryViewCallbacks['loadSnapshot'];
+      loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
+      openNotePath: (notePath: string) => Promise<void>;
       unfollowComponent: (componentKey: string) => Promise<void>;
     }
   ) {
     super(leaf);
+    this.loadComponentInventory = inventoryCallbacks.loadComponentInventory;
+    this.openNotePath = inventoryCallbacks.openNotePath;
     this.componentInventoryView = new ComponentInventoryView({
-      loadSnapshot: inventoryCallbacks.loadComponentInventory,
+      loadSnapshot: async () => this.loadComponentWorkspaceSnapshot(this.loadComponentInventory),
       onDisableComponent: inventoryCallbacks.disableComponent,
       onEnableComponent: inventoryCallbacks.enableComponent,
       onFollowComponent: inventoryCallbacks.followComponent,
+      onOpenNote: (notePath) => {
+        void this.openNotePath(notePath);
+      },
       onUnfollowComponent: inventoryCallbacks.unfollowComponent
     });
   }
@@ -86,6 +97,8 @@ export class VulnDashView extends ItemView {
     this.maxResults = settings.maxResults;
     this.colorCodedSeverity = settings.colorCodedSeverity;
     this.columnVisibility = settings.columnVisibility;
+    this.componentWorkspaceDirty = true;
+    this.componentWorkspaceSnapshot = null;
     this.componentInventoryView.invalidate();
     void this.renderActiveTab();
   }
@@ -110,6 +123,8 @@ export class VulnDashView extends ItemView {
       Array.from(this.expandedItems).filter((id) => current.has(id))
     );
     this.vulnerabilities = vulnerabilities;
+    this.componentWorkspaceDirty = true;
+    this.componentWorkspaceSnapshot = null;
 
     if (this.activeTab === 'vulnerabilities') {
       void this.renderVulnerabilityPanel();
@@ -172,6 +187,19 @@ export class VulnDashView extends ItemView {
     }
   }
 
+  private async loadComponentWorkspaceSnapshot(
+    loader: () => Promise<ComponentInventoryWorkspaceSnapshot>
+  ): Promise<ComponentInventoryWorkspaceSnapshot> {
+    if (!this.componentWorkspaceDirty && this.componentWorkspaceSnapshot) {
+      return this.componentWorkspaceSnapshot;
+    }
+
+    const snapshot = await loader();
+    this.componentWorkspaceSnapshot = snapshot;
+    this.componentWorkspaceDirty = false;
+    return snapshot;
+  }
+
   private async renderActiveTab(): Promise<void> {
     if (!this.vulnerabilityPanelEl || !this.componentPanelEl) {
       return;
@@ -202,6 +230,10 @@ export class VulnDashView extends ItemView {
     }
 
     const activeToken = ++this.vulnerabilityRenderToken;
+    const componentWorkspaceSnapshot = await this.loadComponentWorkspaceSnapshot(this.loadComponentInventory);
+    if (activeToken !== this.vulnerabilityRenderToken) {
+      return;
+    }
     this.vulnerabilityPanelEl.empty();
 
     const filterBar = this.vulnerabilityPanelEl.createDiv({ cls: 'vulndash-vulnerability-toolbar vulndash-card-shell' });
@@ -337,6 +369,12 @@ export class VulnDashView extends ItemView {
         refs.createEl('br');
       }
 
+      this.renderRelatedComponents(
+        detailsCell,
+        vulnerability,
+        componentWorkspaceSnapshot.relationships.componentsByVulnerability
+      );
+
       row.addEventListener('click', () => {
         const isHidden = details.style.display === 'none';
         details.style.display = isHidden ? 'table-row' : 'none';
@@ -361,6 +399,35 @@ export class VulnDashView extends ItemView {
     }
 
     await MarkdownRenderer.render(this.app, vulnerability.summary, container, '', this);
+  }
+
+  private renderRelatedComponents(
+    containerEl: HTMLElement,
+    vulnerability: Vulnerability,
+    componentsByVulnerability: ReadonlyMap<string, RelatedComponentSummary[]>
+  ): void {
+    const vulnerabilityRef = `${vulnerability.source.trim().toLowerCase()}::${vulnerability.id.trim().toLowerCase()}`;
+    const relatedComponents = componentsByVulnerability.get(vulnerabilityRef) ?? [];
+
+    const section = containerEl.createDiv({ cls: 'vulndash-related-components-section' });
+    section.createEl('strong', { text: 'Related Components:' });
+
+    if (relatedComponents.length === 0) {
+      section.createEl('p', {
+        cls: 'vulndash-muted-copy',
+        text: 'No deterministic SBOM component matches were found for this vulnerability.'
+      });
+      return;
+    }
+
+    const list = section.createDiv({ cls: 'vulndash-component-chip-list' });
+    for (const component of relatedComponents) {
+      const label = component.version ? `${component.name} ${component.version}` : component.name;
+      list.createSpan({
+        cls: 'vulndash-badge vulndash-badge-neutral',
+        text: `${label} (${component.evidence})`
+      });
+    }
   }
 
   private getSorted(): Vulnerability[] {

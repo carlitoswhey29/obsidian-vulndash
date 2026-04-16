@@ -34,6 +34,33 @@ const normalizeVersion = (value: string | undefined): string | undefined => {
 };
 
 export class ComponentIdentityService {
+  public normalizePurlValue(value: string): string {
+    return normalizePurl(value);
+  }
+
+  public normalizeCpeValue(value: string): string {
+    return normalizeCpe(value);
+  }
+
+  public normalizeComponentNameValue(value: string): string | undefined {
+    return normalizeComponentName(value);
+  }
+
+  public normalizeVersionValue(value: string): string | undefined {
+    return normalizeVersion(value);
+  }
+
+  public getNameVersionKeyFromParts(name: string, version: string): string | null {
+    const normalizedName = normalizeComponentName(name);
+    const normalizedVersion = normalizeVersion(version);
+
+    if (!normalizedName || !normalizedVersion) {
+      return null;
+    }
+
+    return `name-version:${normalizedName}@${normalizedVersion}`;
+  }
+
   public getCanonicalKey(component: NormalizedComponent): string {
     const purl = component.purl?.trim();
     if (purl) {

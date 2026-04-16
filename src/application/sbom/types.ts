@@ -62,6 +62,50 @@ export interface ComponentInventorySnapshot {
   parsedSbomCount: number;
 }
 
+export type ComponentVulnerabilityLinkEvidence = 'cpe' | 'explicit' | 'name-version' | 'purl';
+
+export interface ComponentVulnerabilityRelationship {
+  componentKey: string;
+  evidence: ComponentVulnerabilityLinkEvidence;
+  vulnerabilityId: string;
+  vulnerabilityRef: string;
+  vulnerabilitySource: string;
+}
+
+export interface RelatedComponentSummary {
+  evidence: ComponentVulnerabilityLinkEvidence;
+  key: string;
+  name: string;
+  vulnerabilityCount: number;
+  cpe?: string;
+  highestSeverity?: NormalizedSeverity;
+  notePath?: string | null;
+  purl?: string;
+  version?: string;
+}
+
+export interface RelatedVulnerabilitySummary {
+  cvssScore: number;
+  evidence: ComponentVulnerabilityLinkEvidence;
+  id: string;
+  referenceCount: number;
+  severity: string;
+  source: string;
+  title: string;
+  notePath?: string;
+}
+
+export interface ComponentRelationshipGraph {
+  componentsByVulnerability: Map<string, RelatedComponentSummary[]>;
+  relationships: ComponentVulnerabilityRelationship[];
+  vulnerabilitiesByComponent: Map<string, RelatedVulnerabilitySummary[]>;
+}
+
+export interface ComponentInventoryWorkspaceSnapshot {
+  inventory: ComponentInventorySnapshot;
+  relationships: ComponentRelationshipGraph;
+}
+
 export interface CatalogComponentInput {
   component: NormalizedComponent;
   document: {
