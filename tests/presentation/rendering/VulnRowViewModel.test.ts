@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { RelatedComponentSummary } from '../../../src/application/sbom/types';
+import { EMPTY_AFFECTED_PROJECT_RESOLUTION } from '../../../src/domain/correlation/AffectedProjectResolution';
 import type { Vulnerability } from '../../../src/domain/entities/Vulnerability';
 import { areVulnRowViewModelsEqual, buildVulnRowViewModel } from '../../../src/presentation/rendering/VulnRowViewModel';
 
@@ -26,7 +27,8 @@ const createRelatedComponent = (overrides: Partial<RelatedComponentSummary> = {}
   ...overrides
 });
 
-const buildRow = (overrides: Parameters<typeof buildVulnRowViewModel>[1] = {
+const createOptions = (overrides: Partial<Parameters<typeof buildVulnRowViewModel>[1]> = {}): Parameters<typeof buildVulnRowViewModel>[1] => ({
+  affectedProjectResolution: EMPTY_AFFECTED_PROJECT_RESOLUTION,
   colorCodedSeverity: true,
   columns: [{ key: 'id', label: 'ID' }, { key: 'severity', label: 'Severity' }],
   expanded: false,
@@ -34,8 +36,12 @@ const buildRow = (overrides: Parameters<typeof buildVulnRowViewModel>[1] = {
   isNew: false,
   relatedComponents: [],
   triagePending: false,
-  triageState: 'active'
-}) => buildVulnRowViewModel(createVulnerability(), overrides);
+  triageState: 'active',
+  ...overrides
+});
+
+const buildRow = (overrides: Partial<Parameters<typeof buildVulnRowViewModel>[1]> = {}) =>
+  buildVulnRowViewModel(createVulnerability(), createOptions(overrides));
 
 test('row view-model equality stays stable for identical rendered data', () => {
   const left = buildRow();
@@ -46,50 +52,56 @@ test('row view-model equality stays stable for identical rendered data', () => {
 
 test('row view-model equality detects rendered severity-style and related-component changes', () => {
   const vulnerability = createVulnerability();
-  const base = buildVulnRowViewModel(vulnerability, {
-    colorCodedSeverity: true,
-    columns: [{ key: 'id', label: 'ID' }, { key: 'severity', label: 'Severity' }],
+  const base = buildVulnRowViewModel(vulnerability, createOptions({
     expanded: true,
-    getRowKey: (item) => `${item.source}:${item.id}`,
-    isNew: false,
-    relatedComponents: [createRelatedComponent()],
-    triagePending: false,
-    triageState: 'active'
-  });
-  const changed = buildVulnRowViewModel(vulnerability, {
+    relatedComponents: [createRelatedComponent()]
+  }));
+  const changed = buildVulnRowViewModel(vulnerability, createOptions({
     colorCodedSeverity: false,
-    columns: [{ key: 'id', label: 'ID' }, { key: 'severity', label: 'Severity' }],
     expanded: true,
-    getRowKey: (item) => `${item.source}:${item.id}`,
-    isNew: false,
-    relatedComponents: [createRelatedComponent({ evidence: 'explicit' })],
-    triagePending: false,
-    triageState: 'active'
-  });
+    relatedComponents: [createRelatedComponent({ evidence: 'explicit' })]
+  }));
 
   assert.equal(areVulnRowViewModelsEqual(base, changed), false);
 });
 
 test('row view-model equality detects triage-state and pending changes', () => {
-  const base = buildRow({
-    colorCodedSeverity: true,
-    columns: [{ key: 'id', label: 'ID' }, { key: 'severity', label: 'Severity' }],
-    expanded: false,
-    getRowKey: (item) => `${item.source}:${item.id}`,
-    isNew: false,
-    relatedComponents: [],
-    triagePending: false,
-    triageState: 'active'
-  });
+  const base = buildRow();
   const changed = buildRow({
-    colorCodedSeverity: true,
-    columns: [{ key: 'id', label: 'ID' }, { key: 'severity', label: 'Severity' }],
-    expanded: false,
-    getRowKey: (item) => `${item.source}:${item.id}`,
-    isNew: false,
-    relatedComponents: [],
     triagePending: true,
     triageState: 'mitigated'
+  });
+
+  assert.equal(areVulnRowViewModelsEqual(base, changed), false);
+});
+
+test('row view-model equality detects affected-project rendering changes', () => {
+  const base = buildRow({
+    affectedProjectResolution: {
+      affectedProjects: [{
+        displayName: 'Portal Platform',
+        notePath: 'Projects/Portal.md',
+        sourceSbomIds: ['sbom-1'],
+        sourceSbomLabels: ['Portal SBOM'],
+        status: 'linked'
+      }],
+      unmappedSboms: []
+    }
+  });
+  const changed = buildRow({
+    affectedProjectResolution: {
+      affectedProjects: [{
+        displayName: 'Portal Platform',
+        notePath: 'Projects/Portal.md',
+        sourceSbomIds: ['sbom-1'],
+        sourceSbomLabels: ['Portal SBOM'],
+        status: 'broken'
+      }],
+      unmappedSboms: [{
+        sbomId: 'sbom-2',
+        sbomLabel: 'Gateway SBOM'
+      }]
+    }
   });
 
   assert.equal(areVulnRowViewModelsEqual(base, changed), false);

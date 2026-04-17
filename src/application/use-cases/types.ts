@@ -81,6 +81,8 @@ export interface ImportedSbomConfig {
   namespace?: string;
   componentCount?: number;
   lastError?: string;
+  linkedProjectNotePath?: string;
+  linkedProjectDisplayName?: string;
 }
 
 export interface RuntimeSbomComponent {
@@ -151,3 +153,4 @@ export interface ResolvedSbomComponent {
 
 export const buildSbomOverrideKey = (sbomId: string, originalName: string): string =>
   `${sbomId}::${originalName.trim()}`;
+

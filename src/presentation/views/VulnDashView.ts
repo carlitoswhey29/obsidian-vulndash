@@ -1,9 +1,15 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
 import type { ChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
 import { buildVulnerabilityCacheKey, createEmptyChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
+import { FilterByAffectedProject, type AffectedProjectFilter } from '../../application/correlation/FilterByAffectedProject';
 import type { ComponentInventoryWorkspaceSnapshot } from '../../application/sbom/types';
 import type { TriageFilterMode } from '../../application/triage/FilterByTriageState';
 import type { DashboardSortOrder, VulnDashSettings } from '../../application/use-cases/types';
+import { RelationshipNormalizer } from '../../application/sbom/RelationshipNormalizer';
+import {
+  EMPTY_AFFECTED_PROJECT_RESOLUTION,
+  type AffectedProjectResolution
+} from '../../domain/correlation/AffectedProjectResolution';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { buildTriageCorrelationKeyForVulnerability } from '../../domain/triage/TriageCorrelation';
 import type { TriageRecord } from '../../domain/triage/TriageRecord';
@@ -29,6 +35,8 @@ interface VulnerabilityTriageViewState {
 }
 
 const EMPTY_CHANGE_HINTS = createEmptyChangedVulnerabilityIds();
+const ALL_AFFECTED_PROJECT_FILTER_VALUE = '__all__';
+const UNMAPPED_AFFECTED_PROJECT_FILTER_VALUE = '__unmapped__';
 
 const compareStrings = (left: string, right: string): number => left.localeCompare(right);
 
@@ -42,6 +50,9 @@ const createSingleUpdatedHint = (key: string): ChangedVulnerabilityIds => ({
 
 export class VulnDashView extends ItemView {
   private activeTab: VulnDashTab = 'vulnerabilities';
+  private affectedProjectFilterValue = ALL_AFFECTED_PROJECT_FILTER_VALUE;
+  private affectedProjectFilterSelectEl: HTMLSelectElement | null = null;
+  private affectedProjectsByVulnerabilityRef = new Map<string, AffectedProjectResolution>();
   private componentWorkspaceDirty = true;
   private componentWorkspaceSnapshot: ComponentInventoryWorkspaceSnapshot | null = null;
   private readonly componentInventoryView: ComponentInventoryView;
@@ -63,6 +74,8 @@ export class VulnDashView extends ItemView {
   private sortKey: SortKey = 'publishedAt';
   private tabButtons = new Map<VulnDashTab, HTMLButtonElement>();
   private readonly triageByVulnerabilityKey = new Map<string, VulnerabilityTriageViewState>();
+  private readonly affectedProjectFilter = new FilterByAffectedProject();
+  private readonly relationshipNormalizer = new RelationshipNormalizer();
   private readonly triageFilterControl = new TriageFilterControl({
     onChange: (triageFilter) => {
       void this.onTriageFilterChange(triageFilter);
@@ -120,6 +133,7 @@ export class VulnDashView extends ItemView {
     });
     this.vulnerabilityTable = new VirtualizedVulnTable({
       colorCodedSeverity: () => this.colorCodedSeverity,
+      getAffectedProjectResolution: (vulnerability) => this.getAffectedProjectResolution(vulnerability),
       getRelatedComponents: (vulnerability) => {
         const vulnerabilityRef = `${vulnerability.source.trim().toLowerCase()}::${vulnerability.id.trim().toLowerCase()}`;
         return this.relatedComponentsByVulnerability.get(vulnerabilityRef) ?? [];
@@ -140,6 +154,9 @@ export class VulnDashView extends ItemView {
           forcePatchAll: false,
           reloadRelationships: false
         });
+      },
+      onOpenAffectedProject: (notePath) => {
+        void this.openNotePath(notePath);
       },
       onTriageStateChange: (vulnerability, state) => {
         void this.handleTriageStateChange(vulnerability, state);
@@ -213,6 +230,7 @@ export class VulnDashView extends ItemView {
   public setData(
     vulnerabilities: Vulnerability[],
     triageByKey: ReadonlyMap<string, VulnerabilityTriageViewState>,
+    affectedProjectsByVulnerabilityRef: ReadonlyMap<string, AffectedProjectResolution>,
     changedIds: ChangedVulnerabilityIds = EMPTY_CHANGE_HINTS
   ): void {
     const hasChangeHints = changedIds.added.length > 0 || changedIds.updated.length > 0 || changedIds.removed.length > 0;
@@ -238,7 +256,9 @@ export class VulnDashView extends ItemView {
     for (const [key, triageState] of triageByKey) {
       this.triageByVulnerabilityKey.set(key, triageState);
     }
+    this.affectedProjectsByVulnerabilityRef = new Map(affectedProjectsByVulnerabilityRef);
     this.vulnerabilities = vulnerabilities;
+    this.syncAffectedProjectFilterControl();
     this.componentWorkspaceDirty = true;
     this.componentWorkspaceSnapshot = null;
     this.componentInventoryView.invalidate();
@@ -345,7 +365,13 @@ export class VulnDashView extends ItemView {
   }
 
   private getFilteredVulnerabilities(): Vulnerability[] {
-    let data = this.getSorted().slice(0, this.maxResults);
+    let data = this.getSorted();
+    data = this.affectedProjectFilter.execute(
+      data,
+      this.getSelectedAffectedProjectFilter(),
+      (vulnerability) => this.getAffectedProjectResolution(vulnerability)
+    );
+
     if (this.localSearchQuery) {
       data = data.filter((vulnerability) =>
         vulnerability.title.toLowerCase().includes(this.localSearchQuery)
@@ -354,7 +380,67 @@ export class VulnDashView extends ItemView {
       );
     }
 
-    return data;
+    return data.slice(0, this.maxResults);
+  }
+
+  private getAffectedProjectFilterOptions(): Array<{ label: string; value: string; }> {
+    const projects = new Map<string, string>();
+    let hasUnmapped = false;
+
+    for (const resolution of this.affectedProjectsByVulnerabilityRef.values()) {
+      if (resolution.unmappedSboms.length > 0) {
+        hasUnmapped = true;
+      }
+
+      for (const project of resolution.affectedProjects) {
+        projects.set(
+          project.notePath,
+          project.status === 'broken' ? `${project.displayName} (missing)` : project.displayName
+        );
+      }
+    }
+
+    const options = [{
+      label: 'All projects',
+      value: ALL_AFFECTED_PROJECT_FILTER_VALUE
+    }];
+
+    if (hasUnmapped) {
+      options.push({
+        label: 'Unmapped SBOM findings',
+        value: UNMAPPED_AFFECTED_PROJECT_FILTER_VALUE
+      });
+    }
+
+    for (const [notePath, label] of Array.from(projects.entries()).sort((left, right) =>
+      left[1].localeCompare(right[1]) || left[0].localeCompare(right[0]))) {
+      options.push({
+        label,
+        value: notePath
+      });
+    }
+
+    return options;
+  }
+
+  private getAffectedProjectResolution(vulnerability: Vulnerability): AffectedProjectResolution {
+    const vulnerabilityRef = this.relationshipNormalizer.buildVulnerabilityRef(vulnerability);
+    return this.affectedProjectsByVulnerabilityRef.get(vulnerabilityRef) ?? EMPTY_AFFECTED_PROJECT_RESOLUTION;
+  }
+
+  private getSelectedAffectedProjectFilter(): AffectedProjectFilter {
+    if (this.affectedProjectFilterValue === ALL_AFFECTED_PROJECT_FILTER_VALUE) {
+      return { kind: 'all' };
+    }
+
+    if (this.affectedProjectFilterValue === UNMAPPED_AFFECTED_PROJECT_FILTER_VALUE) {
+      return { kind: 'unmapped' };
+    }
+
+    return {
+      kind: 'project',
+      notePath: this.affectedProjectFilterValue
+    };
   }
 
   private getSorted(): Vulnerability[] {
@@ -466,6 +552,19 @@ export class VulnDashView extends ItemView {
       cls: 'vulndash-search-bar'
     });
     this.searchInputEl.value = this.localSearchQuery;
+
+    const affectedProjectField = filterBar.createDiv({ cls: 'vulndash-triage-filter' });
+    affectedProjectField.createEl('label', { text: 'Affected project' });
+    this.affectedProjectFilterSelectEl = affectedProjectField.createEl('select', { cls: 'vulndash-triage-filter-select' });
+    this.affectedProjectFilterSelectEl.addEventListener('change', (event) => {
+      this.affectedProjectFilterValue = (event.target as HTMLSelectElement).value;
+      void this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
+        forcePatchAll: false,
+        reloadRelationships: false
+      });
+    });
+    this.syncAffectedProjectFilterControl();
+
     this.triageFilterControl.mount(filterBar, this.getTriageFilter());
     this.searchInputEl.addEventListener('input', (event) => {
       this.localSearchQuery = (event.target as HTMLInputElement).value.toLowerCase();
@@ -480,6 +579,25 @@ export class VulnDashView extends ItemView {
         });
       }, 250);
     });
+  }
+
+  private syncAffectedProjectFilterControl(): void {
+    if (!this.affectedProjectFilterSelectEl) {
+      return;
+    }
+
+    const options = this.getAffectedProjectFilterOptions();
+    const validValues = new Set(options.map((option) => option.value));
+    if (!validValues.has(this.affectedProjectFilterValue)) {
+      this.affectedProjectFilterValue = ALL_AFFECTED_PROJECT_FILTER_VALUE;
+    }
+
+    this.affectedProjectFilterSelectEl.empty();
+    for (const option of options) {
+      const optionEl = this.affectedProjectFilterSelectEl.createEl('option', { text: option.label });
+      optionEl.value = option.value;
+      optionEl.selected = option.value === this.affectedProjectFilterValue;
+    }
   }
 
   private compareVulnerabilities(left: Vulnerability, right: Vulnerability, sortKey: SortKey): number {
@@ -583,3 +701,10 @@ export class VulnDashView extends ItemView {
     }
   }
 }
+
+
+
+
+
+
+
