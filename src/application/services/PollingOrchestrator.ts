@@ -1,7 +1,7 @@
 import type { VulnerabilityFeed } from '../ports/VulnerabilityFeed';
 import type { PipelineEventListener } from '../pipeline/PipelineEvents';
 import type { PipelineConfig } from '../pipeline/PipelineTypes';
-import { VulnerabilitySyncService, type SyncOutcome, type SyncResult, type SyncState } from './VulnerabilitySyncService';
+import { VulnerabilitySyncService, type SyncOutcome, type SyncState } from './VulnerabilitySyncService';
 import type { SyncControls } from './types';
 
 interface PollingOptions {
@@ -65,3 +65,4 @@ export class PollingOrchestrator {
     };
   }
 }
+

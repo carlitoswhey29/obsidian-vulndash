@@ -297,3 +297,78 @@ test('rejects JSON files that are not a supported SBOM format', async () => {
     'Unsupported SBOM JSON format in "reports/notes.json". Supported formats: CycloneDX JSON and SPDX JSON.'
   );
 });
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+};
+
+const createDeferred = <T>(): Deferred<T> => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return {
+    promise,
+    resolve
+  };
+};
+
+class SequencedSbomReader {
+  private readonly reads: Array<Deferred<string>> = [];
+
+  public enqueueRead(read: Deferred<string>): void {
+    this.reads.push(read);
+  }
+
+  public async exists(): Promise<boolean> {
+    return true;
+  }
+
+  public async read(): Promise<string> {
+    const nextRead = this.reads.shift();
+    if (!nextRead) {
+      throw new Error('unexpected read');
+    }
+
+    return nextRead.promise;
+  }
+}
+
+test('does not allow an older asynchronous SBOM load to overwrite a newer runtime state', async () => {
+  const reader = new SequencedSbomReader();
+  const firstRead = createDeferred<string>();
+  const secondRead = createDeferred<string>();
+  reader.enqueueRead(firstRead);
+  reader.enqueueRead(secondRead);
+
+  const service = new SbomImportService(reader);
+  const config = createSbomConfig();
+
+  const firstLoadPromise = service.loadSbom(config, { force: true });
+  const secondLoadPromise = service.loadSbom(config, { force: true });
+
+  secondRead.resolve(JSON.stringify({
+    bomFormat: 'CycloneDX',
+    components: [{ name: 'portal-web' }]
+  }));
+
+  const secondLoad = await secondLoadPromise;
+  assert.equal(secondLoad.success, true);
+
+  firstRead.resolve(JSON.stringify({
+    bomFormat: 'CycloneDX',
+    components: [{ name: 'legacy-api' }]
+  }));
+
+  const firstLoad = await firstLoadPromise;
+  assert.equal(firstLoad.success, true);
+  if (!firstLoad.success || !secondLoad.success) {
+    return;
+  }
+
+  assert.equal(firstLoad.fromCache, true);
+  assert.equal(firstLoad.state.components[0]?.originalName, 'portal-web');
+  assert.equal(service.getRuntimeState(config.id)?.components[0]?.originalName, 'portal-web');
+});

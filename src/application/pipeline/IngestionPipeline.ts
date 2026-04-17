@@ -25,19 +25,18 @@ import type {
   PipelineSourceContext
 } from './PipelineTypes';
 import {
+  DEFAULT_PIPELINE_CONFIG,
   buildVulnerabilityCacheKey,
   compareVulnerabilitiesByFreshness,
-  DEFAULT_PIPELINE_CONFIG,
   sortVulnerabilitiesDeterministically,
   toSortedChangedVulnerabilityIds
 } from './PipelineTypes';
+import { normalizeVulnerabilityBatch } from './VulnerabilityBatchNormalizer';
+import { AsyncTaskCoordinator } from '../../infrastructure/async/AsyncTaskCoordinator';
+import { CooperativeScheduler } from '../../infrastructure/async/CooperativeScheduler';
 
 const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, ms));
-};
-
-const yieldToEventLoop = async (): Promise<void> => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
 interface CollectedFetchBatches {
@@ -69,14 +68,23 @@ export interface IngestionPipelineResult {
   readonly warnings: readonly string[];
 }
 
-export class IngestionPipeline {
-  private readonly config: PipelineConfig;
+export interface IngestionPipelineOptions extends Partial<PipelineConfig> {
+  readonly asyncTaskCoordinator?: AsyncTaskCoordinator;
+  readonly cooperativeScheduler?: CooperativeScheduler;
+}
 
-  public constructor(config: Partial<PipelineConfig> = {}) {
+export class IngestionPipeline {
+  private readonly asyncTaskCoordinator: AsyncTaskCoordinator;
+  private readonly config: PipelineConfig;
+  private readonly cooperativeScheduler: CooperativeScheduler;
+
+  public constructor(options: IngestionPipelineOptions = {}) {
     this.config = {
       ...DEFAULT_PIPELINE_CONFIG,
-      ...config
+      ...options
     };
+    this.asyncTaskCoordinator = options.asyncTaskCoordinator ?? new AsyncTaskCoordinator();
+    this.cooperativeScheduler = options.cooperativeScheduler ?? new CooperativeScheduler();
   }
 
   public async run(request: IngestionPipelineRequest): Promise<IngestionPipelineResult> {
@@ -100,7 +108,7 @@ export class IngestionPipeline {
         batchIndex
       )) {
         batchIndex = chunk.batchIndex + 1;
-        const normalizedBatch = this.normalizeBatch(chunk);
+        const normalizedBatch = await this.normalizeBatch(chunk);
         processedItems += normalizedBatch.normalizedCount;
 
         await request.onEvent?.({
@@ -137,7 +145,7 @@ export class IngestionPipeline {
           });
         }
 
-        await yieldToEventLoop();
+        await this.cooperativeScheduler.yieldToHost({ timeoutMs: 16 });
       }
     }
 
@@ -289,26 +297,17 @@ export class IngestionPipeline {
     return batches;
   }
 
-  private normalizeBatch(input: PipelineBatchInput): NormalizedVulnerabilityBatch {
-    const latestByKey = new Map<string, Vulnerability>();
+  private async normalizeBatch(input: PipelineBatchInput): Promise<NormalizedVulnerabilityBatch> {
+    const result = await this.asyncTaskCoordinator.execute('normalize-vulnerabilities', {
+      input
+    }, {
+      fallback: async ({ input: fallbackInput }) => ({
+        batch: normalizeVulnerabilityBatch(fallbackInput)
+      }),
+      preferWorker: input.vulnerabilities.length >= this.config.normalizeWorkerMinimumItems
+    });
 
-    for (const vulnerability of input.vulnerabilities) {
-      const key = buildVulnerabilityCacheKey(vulnerability);
-      const previous = latestByKey.get(key);
-      if (!previous || compareVulnerabilitiesByFreshness(vulnerability, previous) > 0) {
-        latestByKey.set(key, vulnerability);
-      }
-    }
-
-    const vulnerabilities = sortVulnerabilitiesDeterministically(latestByKey.values());
-    return {
-      batchIndex: input.batchIndex,
-      normalizedCount: vulnerabilities.length,
-      sourceId: input.sourceId,
-      sourceName: input.sourceName,
-      totalFetchedItems: input.totalFetchedItems,
-      vulnerabilities
-    };
+    return result.batch;
   }
 
   private mergeNormalizedBatch(
