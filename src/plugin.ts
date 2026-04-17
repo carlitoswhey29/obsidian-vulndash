@@ -18,8 +18,10 @@ import type {
   ComponentInventoryWorkspaceSnapshot
 } from './application/sbom/types';
 import { AlertEngine } from './application/services/AlertEngine';
+import type { PipelineEvent } from './application/pipeline/PipelineEvents';
+import type { ChangedVulnerabilityIds } from './application/pipeline/PipelineTypes';
+import { buildVulnerabilityCacheKey, createEmptyChangedVulnerabilityIds } from './application/pipeline/PipelineTypes';
 import { buildFeedsFromConfig } from './application/services/FeedFactory';
-import { PollingOrchestrator } from './application/services/PollingOrchestrator';
 import { SbomComparisonService, type SbomComparisonResult } from './application/services/SbomComparisonService';
 import { SbomFilterMergeService } from './application/services/SbomFilterMergeService';
 import {
@@ -29,6 +31,7 @@ import {
   type SbomValidationResult
 } from './application/services/SbomImportService';
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from './application/services/SyncOutcomeDiagnostics';
+import { VulnerabilitySyncService, type SyncOutcome } from './application/services/VulnerabilitySyncService';
 import type {
   ColumnVisibility,
   FeedConfig,
@@ -411,6 +414,9 @@ export default class VulnDashPlugin extends Plugin {
   private readonly sbomComparisonService = new SbomComparisonService();
   private readonly sbomFilterMergeService = new SbomFilterMergeService();
   private sbomImportService: SbomImportService | null = null;
+  private syncService: VulnerabilitySyncService | null = null;
+  private syncServiceGeneration = 0;
+  private dataProcessingChain: Promise<void> = Promise.resolve();
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private visibleVulnerabilities: Vulnerability[] = [];
@@ -465,34 +471,8 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async refreshNow(): Promise<void> {
-    const now = Date.now();
-    const cacheValid = now - this.lastFetchAt <= this.settings.cacheDurationMs;
-    if (cacheValid && this.cachedVulnerabilities.length > 0) {
-      await this.processData(this.cachedVulnerabilities);
-      return;
-    }
-
-    const orchestrator = this.createOrchestrator();
-    try {
-      const outcome = await orchestrator.pollOnce();
-      const syncSummaries = summarizeSyncResults(outcome.results);
-      for (const summary of syncSummaries) {
-        console.info('[vulndash.sync.feed_summary]', summary);
-      }
-      const failureNotice = buildFailureNoticeMessage(outcome.results);
-      if (failureNotice) {
-        new Notice(failureNotice);
-      }
-      this.cachedVulnerabilities = outcome.vulnerabilities;
-      this.settings.sourceSyncCursor = outcome.sourceSyncCursor;
-      await this.saveSettings();
-      this.lastFetchAt = Date.now();
-      await this.processData(outcome.vulnerabilities);
-    } catch {
-      new Notice('VulnDash refresh failed. Check your network or API tokens.');
-    }
+    await this.runSync();
   }
-
   public async updateSettings(next: VulnDashSettings): Promise<void> {
     await this.applySettings(next, { refetchRemoteData: true, restartPolling: true });
   }
@@ -514,7 +494,6 @@ export default class VulnDashPlugin extends Plugin {
 
     this.startPolling();
     this.updateViewPollingState();
-    await this.refreshNow();
   }
 
   public async importProductFiltersFromSbom(): Promise<void> {
@@ -832,21 +811,51 @@ export default class VulnDashPlugin extends Plugin {
     }, index);
   }
 
-  private async processData(vulnerabilities: Vulnerability[]): Promise<void> {
+  private processData(
+    vulnerabilities: Vulnerability[],
+    changedIds: ChangedVulnerabilityIds = createEmptyChangedVulnerabilityIds(),
+    options: {
+      suppressNotifications?: boolean;
+    } = {}
+  ): Promise<void> {
+    this.dataProcessingChain = this.dataProcessingChain
+      .catch(() => undefined)
+      .then(async () => this.processDataInternal(vulnerabilities, changedIds, options));
+
+    return this.dataProcessingChain;
+  }
+
+  private async processDataInternal(
+    vulnerabilities: Vulnerability[],
+    changedIds: ChangedVulnerabilityIds,
+    options: {
+      suppressNotifications?: boolean;
+    }
+  ): Promise<void> {
     const filtered = this.alertEngine.filter(vulnerabilities, this.settings);
     const diagnostics = buildVisibilityDiagnostics(vulnerabilities, filtered);
     console.info('[vulndash.filter.visibility]', diagnostics);
+
+    const currentVisible = new Map(filtered.map((vulnerability) => [this.getVulnerabilityCacheKey(vulnerability), vulnerability] as const));
+    const candidateKeys = changedIds.added.length > 0 || changedIds.updated.length > 0 || changedIds.removed.length > 0
+      ? Array.from(new Set([...changedIds.added, ...changedIds.updated])).sort((left, right) => left.localeCompare(right))
+      : null;
+    const newItems = candidateKeys
+      ? candidateKeys
+        .filter((key) => !this.previousVisibleIds.has(key))
+        .map((key) => currentVisible.get(key))
+        .filter((vulnerability): vulnerability is Vulnerability => Boolean(vulnerability))
+      : filtered.filter((vulnerability) => !this.previousVisibleIds.has(this.getVulnerabilityCacheKey(vulnerability)));
+
+    this.previousVisibleIds = new Set(currentVisible.keys());
     this.visibleVulnerabilities = filtered;
-    this.updateView(filtered);
-    await this.notifyOnNewItems(filtered);
-  }
+    this.updateView(filtered, {
+      added: newItems.map((vulnerability) => this.getVulnerabilityCacheKey(vulnerability)),
+      removed: changedIds.removed,
+      updated: []
+    });
 
-  private async notifyOnNewItems(vulnerabilities: Vulnerability[]): Promise<void> {
-    const current = new Set(vulnerabilities.map((vulnerability) => `${vulnerability.source}:${vulnerability.id}`));
-    const newItems = vulnerabilities.filter((vulnerability) => !this.previousVisibleIds.has(`${vulnerability.source}:${vulnerability.id}`));
-    this.previousVisibleIds = current;
-
-    if (newItems.length === 0) {
+    if (options.suppressNotifications || newItems.length === 0) {
       return;
     }
 
@@ -975,15 +984,33 @@ export default class VulnDashPlugin extends Plugin {
       return;
     }
 
-    const orchestrator = this.createOrchestrator();
     this.pollingEnabled = true;
-    this.stopPolling = orchestrator.start(this.settings.pollingIntervalMs, (outcome) => {
-      this.cachedVulnerabilities = outcome.vulnerabilities;
-      this.settings.sourceSyncCursor = outcome.sourceSyncCursor;
-      void this.saveSettings();
-      this.lastFetchAt = Date.now();
-      void this.processData(outcome.vulnerabilities);
-    });
+    let timeoutHandle: number | null = null;
+
+    const execute = async (): Promise<void> => {
+      if (!this.pollingEnabled) {
+        return;
+      }
+
+      await this.runSync({ bypassCache: true, showFailureNotice: false });
+      if (!this.pollingEnabled) {
+        return;
+      }
+
+      timeoutHandle = window.setTimeout(() => {
+        void execute();
+      }, this.settings.pollingIntervalMs);
+    };
+
+    this.stopPolling = () => {
+      this.pollingEnabled = false;
+      if (timeoutHandle !== null) {
+        window.clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
+    };
+
+    void execute();
   }
 
   private restartPolling(): void {
@@ -1002,14 +1029,95 @@ export default class VulnDashPlugin extends Plugin {
     this.pollingEnabled = false;
   }
 
-  private createOrchestrator(): PollingOrchestrator {
+  private async runSync(options: {
+    bypassCache?: boolean;
+    showFailureNotice?: boolean;
+  } = {}): Promise<void> {
+    const now = Date.now();
+    const cacheValid = now - this.lastFetchAt <= this.settings.cacheDurationMs;
+    if (!options.bypassCache && cacheValid && this.cachedVulnerabilities.length > 0) {
+      await this.processData(this.cachedVulnerabilities);
+      return;
+    }
+
+    const syncService = this.getOrCreateSyncService();
+    const syncServiceGeneration = this.syncServiceGeneration;
+
+    try {
+      const outcome = await syncService.syncNow();
+      if (this.syncService !== syncService || this.syncServiceGeneration !== syncServiceGeneration) {
+        return;
+      }
+
+      await this.applySyncOutcome(outcome, options.showFailureNotice ?? true);
+    } catch {
+      if (options.showFailureNotice ?? true) {
+        new Notice('VulnDash refresh failed. Check your network or API tokens.');
+      }
+    }
+  }
+
+  private async applySyncOutcome(outcome: SyncOutcome, showFailureNotice: boolean): Promise<void> {
+    const syncSummaries = summarizeSyncResults(outcome.results);
+    for (const summary of syncSummaries) {
+      console.info('[vulndash.sync.feed_summary]', summary);
+    }
+
+    const failureNotice = buildFailureNoticeMessage(outcome.results);
+    if (showFailureNotice && failureNotice) {
+      new Notice(failureNotice);
+    }
+
+    this.cachedVulnerabilities = outcome.vulnerabilities;
+    this.settings.sourceSyncCursor = outcome.sourceSyncCursor;
+    await this.saveSettings();
+    this.lastFetchAt = Date.now();
+    await this.processData(outcome.vulnerabilities, createEmptyChangedVulnerabilityIds(), { suppressNotifications: true });
+  }
+
+  private getOrCreateSyncService(): VulnerabilitySyncService {
+    if (this.syncService) {
+      return this.syncService;
+    }
+
     const client = new HttpClient();
     const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls);
+    const generation = this.syncServiceGeneration;
+    const syncService = new VulnerabilitySyncService({
+      controls: this.settings.syncControls,
+      feeds,
+      onPipelineEvent: (event) => {
+        if (this.syncService !== syncService || this.syncServiceGeneration !== generation) {
+          return;
+        }
 
-    return new PollingOrchestrator(feeds, this.settings.syncControls, {
-      cache: this.cachedVulnerabilities,
-      sourceSyncCursor: this.settings.sourceSyncCursor
+        this.handlePipelineEvent(event);
+      },
+      state: {
+        cache: this.cachedVulnerabilities,
+        sourceSyncCursor: this.settings.sourceSyncCursor
+      }
     });
+
+    this.syncService = syncService;
+    return syncService;
+  }
+
+  private invalidateSyncService(): void {
+    this.syncServiceGeneration += 1;
+    this.syncService = null;
+  }
+
+  private handlePipelineEvent(event: PipelineEvent): void {
+    if (event.stage !== 'notify') {
+      return;
+    }
+
+    void this.processData([...event.vulnerabilities], event.changedIds);
+  }
+
+  private getVulnerabilityCacheKey(vulnerability: Vulnerability): string {
+    return buildVulnerabilityCacheKey(vulnerability);
   }
 
   private updateViewPollingState(): void {
@@ -1022,12 +1130,12 @@ export default class VulnDashPlugin extends Plugin {
     }
   }
 
-  private updateView(vulnerabilities: Vulnerability[]): void {
+  private updateView(vulnerabilities: Vulnerability[], changedIds: ChangedVulnerabilityIds = createEmptyChangedVulnerabilityIds()): void {
     const leaves = this.app.workspace.getLeavesOfType(VULNDASH_VIEW_TYPE);
     for (const leaf of leaves) {
       const view = leaf.view;
       if (view instanceof VulnDashView) {
-        view.setData(vulnerabilities);
+        view.setData(vulnerabilities, changedIds);
       }
     }
   }
@@ -1105,6 +1213,7 @@ export default class VulnDashPlugin extends Plugin {
       feeds: loadedFeeds
     });
     this.settings = migrated;
+    this.invalidateSyncService();
 
     if (nvdSecret.decryptionFailed || githubSecret.decryptionFailed) {
       new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
@@ -1180,6 +1289,7 @@ export default class VulnDashPlugin extends Plugin {
     } = {}
   ): Promise<void> {
     this.settings = normalizeRuntimeSettings(next);
+    this.invalidateSyncService();
     await this.saveSettings();
 
     if (options.restartPolling) {

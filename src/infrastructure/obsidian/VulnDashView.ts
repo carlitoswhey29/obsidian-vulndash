@@ -1,4 +1,6 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
+import type { ChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
+import { buildVulnerabilityCacheKey } from '../../application/pipeline/PipelineTypes';
 import type { ComponentInventoryWorkspaceSnapshot, RelatedComponentSummary } from '../../application/sbom/types';
 import type { DashboardSortOrder, VulnDashSettings } from '../../application/services/types';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
@@ -109,13 +111,24 @@ export class VulnDashView extends ItemView {
     }
   }
 
-  public setData(vulnerabilities: Vulnerability[]): void {
-    const previous = new Set(this.vulnerabilities.map((vulnerability) => vulnerability.id));
-    const current = new Set(vulnerabilities.map((vulnerability) => vulnerability.id));
+  public setData(
+    vulnerabilities: Vulnerability[],
+    changedIds: ChangedVulnerabilityIds = { added: [], removed: [], updated: [] }
+  ): void {
+    const hasChangeHints = changedIds.added.length > 0 || changedIds.updated.length > 0 || changedIds.removed.length > 0;
+    const current = new Set(vulnerabilities.map((vulnerability) => this.getVulnerabilityKey(vulnerability)));
 
-    for (const vulnerability of vulnerabilities) {
-      if (!previous.has(vulnerability.id)) {
-        this.newItems.add(vulnerability.id);
+    if (hasChangeHints) {
+      for (const key of changedIds.added) {
+        this.newItems.add(key);
+      }
+    } else {
+      const previous = new Set(this.vulnerabilities.map((vulnerability) => this.getVulnerabilityKey(vulnerability)));
+      for (const vulnerability of vulnerabilities) {
+        const key = this.getVulnerabilityKey(vulnerability);
+        if (!previous.has(key)) {
+          this.newItems.add(key);
+        }
       }
     }
 
@@ -318,10 +331,11 @@ export class VulnDashView extends ItemView {
       for (const column of visibleColumns) {
         if (column.key === 'id') {
           const idCell = row.createEl('td');
-          const isExpanded = this.expandedItems.has(vulnerability.id);
+          const vulnerabilityKey = this.getVulnerabilityKey(vulnerability);
+          const isExpanded = this.expandedItems.has(vulnerabilityKey);
           idCell.createSpan({ text: isExpanded ? '[-]' : '[+]', cls: 'vulndash-expand-indicator' });
           const idText = idCell.createSpan({ text: sanitizeText(vulnerability.id) });
-          if (this.newItems.has(vulnerability.id)) {
+          if (this.newItems.has(vulnerabilityKey)) {
             idText.addClass('vulndash-new');
           }
         }
@@ -347,7 +361,8 @@ export class VulnDashView extends ItemView {
       }
 
       const details = tbody.createEl('tr', { cls: 'vulndash-row-details' });
-      const isExpanded = this.expandedItems.has(vulnerability.id);
+      const vulnerabilityKey = this.getVulnerabilityKey(vulnerability);
+      const isExpanded = this.expandedItems.has(vulnerabilityKey);
       details.style.display = isExpanded ? 'table-row' : 'none';
 
       const detailsCell = details.createEl('td', { attr: { colspan: String(Math.max(visibleColumns.length, 1)) } });
@@ -379,10 +394,10 @@ export class VulnDashView extends ItemView {
         const isHidden = details.style.display === 'none';
         details.style.display = isHidden ? 'table-row' : 'none';
         if (isHidden) {
-          this.expandedItems.add(vulnerability.id);
+          this.expandedItems.add(vulnerabilityKey);
           void this.renderSummaryIfNeeded(vulnerability, summaryEl);
         } else {
-          this.expandedItems.delete(vulnerability.id);
+          this.expandedItems.delete(vulnerabilityKey);
         }
 
         const indicator = row.querySelector('.vulndash-expand-indicator');
@@ -428,6 +443,10 @@ export class VulnDashView extends ItemView {
         text: `${label} (${component.evidence})`
       });
     }
+  }
+
+  private getVulnerabilityKey(vulnerability: Vulnerability): string {
+    return buildVulnerabilityCacheKey(vulnerability);
   }
 
   private getSorted(): Vulnerability[] {
