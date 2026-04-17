@@ -47,6 +47,7 @@ export interface PipelineProgressEvent {
 
 export interface PipelineConfig {
   readonly chunkSize: number;
+  readonly normalizeWorkerMinimumItems: number;
 }
 
 export interface PipelineSourceContext {
@@ -65,7 +66,8 @@ export interface PipelineSnapshot {
 }
 
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
-  chunkSize: 100
+  chunkSize: 100,
+  normalizeWorkerMinimumItems: 100
 };
 
 export const createEmptyChangedVulnerabilityIds = (): ChangedVulnerabilityIds => ({

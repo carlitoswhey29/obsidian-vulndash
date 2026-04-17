@@ -5,10 +5,64 @@ import console from 'node:console';
 
 const production = process.argv.includes('production');
 
+const WORKER_ENTRY_POINTS = {
+  normalize: 'src/infrastructure/workers/normalize.worker.ts',
+  sbomParse: 'src/infrastructure/workers/sbomParse.worker.ts'
+};
+
 async function copyPluginAssets() {
   await mkdir('dist', { recursive: true });
   await copyFile('manifest.json', 'dist/manifest.json');
   await copyFile('styles.css', 'dist/styles.css');
+}
+
+function createInlineWorkerPlugin() {
+  return {
+    name: 'inline-worker-bundles',
+    setup(build) {
+      build.onResolve({ filter: /^virtual:vulndash-worker\// }, (args) => ({
+        namespace: 'vulndash-worker',
+        path: args.path
+      }));
+
+      build.onLoad({ filter: /.*/, namespace: 'vulndash-worker' }, async (args) => {
+        const workerName = args.path.replace('virtual:vulndash-worker/', '');
+        const entryPoint = WORKER_ENTRY_POINTS[workerName];
+        if (!entryPoint) {
+          return {
+            errors: [{ text: `Unknown VulnDash worker bundle: ${workerName}` }]
+          };
+        }
+
+        const result = await esbuild.build({
+          entryPoints: [entryPoint],
+          bundle: true,
+          format: 'iife',
+          legalComments: 'none',
+          logLevel: 'silent',
+          metafile: true,
+          minify: production,
+          platform: 'browser',
+          sourcemap: false,
+          target: 'es2021',
+          treeShaking: true,
+          write: false
+        });
+        const outputFile = result.outputFiles[0];
+        if (!outputFile) {
+          return {
+            errors: [{ text: `Failed to emit worker bundle for ${workerName}` }]
+          };
+        }
+
+        return {
+          contents: `export default ${JSON.stringify(outputFile.text)};`,
+          loader: 'js',
+          watchFiles: result.metafile ? Object.keys(result.metafile.inputs) : [entryPoint]
+        };
+      });
+    }
+  };
 }
 
 const ctx = await esbuild.context({
@@ -26,6 +80,7 @@ const ctx = await esbuild.context({
   metafile: true,
   treeShaking: true,
   plugins: [
+    createInlineWorkerPlugin(),
     {
       name: 'copy-plugin-assets',
       setup(build) {
@@ -55,3 +110,4 @@ if (production) {
 } else {
   await ctx.watch();
 }
+
