@@ -53,7 +53,14 @@ const DEFAULT_SETTINGS: VulnDashSettings = {
     debugHttpMetadata: false
   },
   sourceSyncCursor: {},
-  settingsVersion: 5,
+  cacheStorage: {
+    hardCap: 5000,
+    hydrateMaxItems: 1000,
+    hydratePageSize: 200,
+    pruneBatchSize: 250,
+    ttlMs: 2592000000
+  },
+  settingsVersion: 6,
   feeds: []
 };
 
@@ -154,3 +161,4 @@ test('resolved components expose effective names without mutating runtime data',
   }]);
   assert.equal(runtimeState.components[0]?.normalizedName, 'Platform Api');
 });
+

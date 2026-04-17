@@ -36,6 +36,7 @@ import type {
   ColumnVisibility,
   FeedConfig,
   ImportedSbomConfig,
+  CacheStorageSettings,
   ResolvedSbomComponent,
   RuntimeSbomState,
   SbomComponentOverride,
@@ -45,6 +46,13 @@ import { buildSbomOverrideKey } from './application/services/types';
 import type { Vulnerability } from './domain/entities/Vulnerability';
 import { ProductNameNormalizer } from './domain/services/ProductNameNormalizer';
 import { HttpClient } from './infrastructure/clients/common/HttpClient';
+import { CooperativeScheduler } from './infrastructure/async/CooperativeScheduler';
+import { CacheHydrator } from './infrastructure/storage/CacheHydrator';
+import { CachePruner } from './infrastructure/storage/CachePruner';
+import { LegacyDataMigration, type LegacyPersistedPluginData } from './infrastructure/storage/LegacyDataMigration';
+import { SyncMetadataRepository } from './infrastructure/storage/SyncMetadataRepository';
+import { VulnCacheDb } from './infrastructure/storage/VulnCacheDb';
+import { VulnCacheRepository } from './infrastructure/storage/VulnCacheRepository';
 import { buildVulnerabilityNoteBody } from './infrastructure/obsidian/VulnerabilityNote';
 import { ComponentNoteResolverFactory } from './infrastructure/obsidian/ComponentNoteResolverFactory';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from './infrastructure/obsidian/VulnDashView';
@@ -80,7 +88,15 @@ const DEFAULT_FEEDS: FeedConfig[] = [
   { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true }
 ];
 
-export const SETTINGS_VERSION = 5;
+const DEFAULT_CACHE_STORAGE: CacheStorageSettings = {
+  hardCap: 5000,
+  hydrateMaxItems: 1000,
+  hydratePageSize: 200,
+  pruneBatchSize: 250,
+  ttlMs: 30 * 24 * 60 * 60 * 1000
+};
+
+export const SETTINGS_VERSION = 6;
 
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
@@ -122,6 +138,7 @@ export const DEFAULT_SETTINGS: VulnDashSettings = {
     debugHttpMetadata: false
   },
   sourceSyncCursor: {},
+  cacheStorage: DEFAULT_CACHE_STORAGE,
   settingsVersion: SETTINGS_VERSION,
   feeds: DEFAULT_FEEDS.map((feed) => ({ ...feed }))
 };
@@ -282,6 +299,14 @@ const migrateLegacySbomOverrides = (sboms: LegacyImportedSbomConfig[]): Record<s
   return overrides;
 };
 
+const normalizeCacheStorage = (value: Partial<CacheStorageSettings> | undefined): CacheStorageSettings => ({
+  hardCap: typeof value?.hardCap === 'number' && Number.isFinite(value.hardCap) && value.hardCap > 0 ? Math.floor(value.hardCap) : DEFAULT_CACHE_STORAGE.hardCap,
+  hydrateMaxItems: typeof value?.hydrateMaxItems === 'number' && Number.isFinite(value.hydrateMaxItems) && value.hydrateMaxItems > 0 ? Math.floor(value.hydrateMaxItems) : DEFAULT_CACHE_STORAGE.hydrateMaxItems,
+  hydratePageSize: typeof value?.hydratePageSize === 'number' && Number.isFinite(value.hydratePageSize) && value.hydratePageSize > 0 ? Math.floor(value.hydratePageSize) : DEFAULT_CACHE_STORAGE.hydratePageSize,
+  pruneBatchSize: typeof value?.pruneBatchSize === 'number' && Number.isFinite(value.pruneBatchSize) && value.pruneBatchSize > 0 ? Math.floor(value.pruneBatchSize) : DEFAULT_CACHE_STORAGE.pruneBatchSize,
+  ttlMs: typeof value?.ttlMs === 'number' && Number.isFinite(value.ttlMs) && value.ttlMs > 0 ? Math.floor(value.ttlMs) : DEFAULT_CACHE_STORAGE.ttlMs
+});
+
 const normalizeRuntimeSettings = (settings: VulnDashSettings): VulnDashSettings => ({
   ...componentPreferenceService.normalizeSettings(settings),
   keywordFilters: normalizeStringList(settings.keywordFilters),
@@ -291,6 +316,7 @@ const normalizeRuntimeSettings = (settings: VulnDashSettings): VulnDashSettings 
   sboms: settings.sboms.map((sbom, index) => normalizeImportedSbomConfig(sbom, index)),
   sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
   sbomPath: '',
+  cacheStorage: normalizeCacheStorage(settings.cacheStorage),
   settingsVersion: SETTINGS_VERSION
 });
 
@@ -369,7 +395,8 @@ export const migrateLegacySettings = (settings: Partial<VulnDashSettings> & { sb
     syncControls: {
       ...DEFAULT_SETTINGS.syncControls,
       ...(settings.syncControls ?? {})
-    }
+    },
+    cacheStorage: normalizeCacheStorage(settings.cacheStorage)
   });
 };
 
@@ -400,6 +427,18 @@ export const buildPersistedSettingsSnapshot = (
   feeds
 });
 
+interface PersistentCacheServices {
+  cacheDb: VulnCacheDb;
+  cacheHydrator: CacheHydrator;
+  cachePruner: CachePruner;
+  cacheRepository: VulnCacheRepository;
+  metadataRepository: SyncMetadataRepository;
+}
+
+type LoadedPluginData = LegacyPersistedPluginData & Partial<VulnDashSettings> & {
+  sboms?: LegacyImportedSbomConfig[];
+};
+
 export default class VulnDashPlugin extends Plugin {
   private settings: VulnDashSettings = DEFAULT_SETTINGS;
   private stopPolling: (() => void) | null = null;
@@ -417,6 +456,9 @@ export default class VulnDashPlugin extends Plugin {
   private syncService: VulnerabilitySyncService | null = null;
   private syncServiceGeneration = 0;
   private dataProcessingChain: Promise<void> = Promise.resolve();
+  private persistentCacheServices: PersistentCacheServices | null = null;
+  private loadedPluginData: LoadedPluginData | null = null;
+  private readonly storageScheduler = new CooperativeScheduler();
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private visibleVulnerabilities: Vulnerability[] = [];
@@ -424,6 +466,7 @@ export default class VulnDashPlugin extends Plugin {
 
   public override async onload(): Promise<void> {
     await this.loadSettings();
+    await this.initializePersistentCache();
     await this.recomputeFilters();
     this.registerMarkdownNotePathObservers();
 
@@ -468,6 +511,9 @@ export default class VulnDashPlugin extends Plugin {
 
   public override onunload(): void {
     this.stopPollingLoop();
+    if (this.persistentCacheServices) {
+      void this.persistentCacheServices.cacheDb.close();
+    }
   }
 
   public async refreshNow(): Promise<void> {
@@ -1069,9 +1115,10 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     this.cachedVulnerabilities = outcome.vulnerabilities;
-    this.settings.sourceSyncCursor = outcome.sourceSyncCursor;
+    this.settings.sourceSyncCursor = this.persistentCacheServices ? {} : outcome.sourceSyncCursor;
     await this.saveSettings();
     this.lastFetchAt = Date.now();
+    this.persistentCacheServices?.cachePruner.schedule(this.settings.cacheStorage);
     await this.processData(outcome.vulnerabilities, createEmptyChangedVulnerabilityIds(), { suppressNotifications: true });
   }
 
@@ -1086,6 +1133,14 @@ export default class VulnDashPlugin extends Plugin {
     const syncService = new VulnerabilitySyncService({
       controls: this.settings.syncControls,
       feeds,
+      ...(this.persistentCacheServices ? {
+        persistence: {
+          cacheHydrationLimit: this.settings.cacheStorage.hydrateMaxItems,
+          cacheHydrationPageSize: this.settings.cacheStorage.hydratePageSize,
+          cacheStore: this.persistentCacheServices.cacheRepository,
+          metadataStore: this.persistentCacheServices.metadataRepository
+        }
+      } : {}),
       onPipelineEvent: (event) => {
         if (this.syncService !== syncService || this.syncServiceGeneration !== generation) {
           return;
@@ -1182,9 +1237,54 @@ export default class VulnDashPlugin extends Plugin {
     await this.refreshNow();
   }
 
+  private async initializePersistentCache(): Promise<void> {
+    try {
+      const cacheDb = new VulnCacheDb();
+      await cacheDb.open();
+      const cacheRepository = new VulnCacheRepository(cacheDb);
+      const metadataRepository = new SyncMetadataRepository(cacheDb);
+      const cacheHydrator = new CacheHydrator(cacheRepository, this.storageScheduler);
+      const cachePruner = new CachePruner(cacheRepository, this.storageScheduler);
+      this.persistentCacheServices = {
+        cacheDb,
+        cacheHydrator,
+        cachePruner,
+        cacheRepository,
+        metadataRepository
+      };
+
+      const migration = await new LegacyDataMigration(cacheRepository, metadataRepository).migrate(
+        this.loadedPluginData,
+        this.settings.feeds
+      );
+
+      const hydrated = await cacheHydrator.hydrateLatest({
+        limit: this.settings.cacheStorage.hydrateMaxItems,
+        pageSize: this.settings.cacheStorage.hydratePageSize
+      });
+      if (hydrated.length > 0) {
+        this.cachedVulnerabilities = hydrated;
+        this.lastFetchAt = Date.now();
+      }
+
+      cachePruner.schedule(this.settings.cacheStorage);
+
+      if (migration.removedLegacyFields) {
+        this.settings = normalizeRuntimeSettings({
+          ...this.settings,
+          sourceSyncCursor: {}
+        });
+        await this.saveSettings();
+      }
+    } catch (error) {
+      this.persistentCacheServices = null;
+      console.warn('[vulndash.cache.persistence_unavailable]', error);
+    }
+  }
   private async loadSettings(): Promise<void> {
     const loaded = await this.loadData();
-    const loadedSettings = (loaded as (Partial<VulnDashSettings> & { sboms?: LegacyImportedSbomConfig[] }) | null) ?? null;
+    const loadedSettings = (loaded as LoadedPluginData | null) ?? null;
+    this.loadedPluginData = loadedSettings;
     const loadedNvd = loadedSettings?.nvdApiKey ?? '';
     const loadedGithub = loadedSettings?.githubToken ?? '';
     const nvdSecret = await this.loadSecret(loadedNvd);
@@ -1243,7 +1343,10 @@ export default class VulnDashPlugin extends Plugin {
       return { ...feed };
     }));
 
-    const dataToSave = buildPersistedSettingsSnapshot(this.settings, {
+    const dataToSave = buildPersistedSettingsSnapshot({
+      ...this.settings,
+      sourceSyncCursor: this.persistentCacheServices ? {} : this.settings.sourceSyncCursor
+    }, {
       githubToken: encryptedGithub,
       nvdApiKey: encryptedNvd
     }, feeds);
@@ -1291,6 +1394,7 @@ export default class VulnDashPlugin extends Plugin {
     this.settings = normalizeRuntimeSettings(next);
     this.invalidateSyncService();
     await this.saveSettings();
+    this.persistentCacheServices?.cachePruner.schedule(this.settings.cacheStorage);
 
     if (options.restartPolling) {
       this.restartPolling();
@@ -1356,3 +1460,10 @@ export default class VulnDashPlugin extends Plugin {
     }));
   }
 }
+
+
+
+
+
+
+
