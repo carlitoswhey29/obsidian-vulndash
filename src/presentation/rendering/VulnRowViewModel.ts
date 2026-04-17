@@ -1,4 +1,5 @@
 import type { RelatedComponentSummary } from '../../application/sbom/types';
+import type { AffectedProjectResolution } from '../../domain/correlation/AffectedProjectResolution';
 import type { TriageState } from '../../domain/triage/TriageState';
 import { formatTriageStateLabel } from '../../domain/triage/TriageState';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
@@ -16,7 +17,15 @@ export interface RelatedComponentBadgeViewModel {
   label: string;
 }
 
+export interface AffectedProjectLinkViewModel {
+  notePath: string;
+  sourceSbomLabels: readonly string[];
+  status: 'broken' | 'linked';
+  text: string;
+}
+
 export interface VulnRowViewModel {
+  affectedProjects: readonly AffectedProjectLinkViewModel[];
   columnKeys: readonly VulnerabilityRowColumnKey[];
   cvssText: string;
   expanded: boolean;
@@ -34,10 +43,21 @@ export interface VulnRowViewModel {
   triageLabel: string;
   triagePending: boolean;
   triageState: TriageState;
+  unmappedSbomLabels: readonly string[];
 }
 
 const areStringArraysEqual = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((value, index) => value === right[index]);
+
+export const areAffectedProjectsEqual = (
+  left: readonly AffectedProjectLinkViewModel[],
+  right: readonly AffectedProjectLinkViewModel[]
+): boolean =>
+  left.length === right.length
+  && left.every((value, index) => value.notePath === right[index]?.notePath
+    && value.status === right[index]?.status
+    && value.text === right[index]?.text
+    && areStringArraysEqual(value.sourceSbomLabels, right[index]?.sourceSbomLabels ?? []));
 
 export const areRelatedComponentsEqual = (
   left: readonly RelatedComponentBadgeViewModel[],
@@ -47,7 +67,8 @@ export const areRelatedComponentsEqual = (
   && left.every((value, index) => value.label === right[index]?.label && value.evidence === right[index]?.evidence);
 
 export const areVulnRowViewModelsEqual = (left: VulnRowViewModel, right: VulnRowViewModel): boolean =>
-  areStringArraysEqual(left.columnKeys, right.columnKeys)
+  areAffectedProjectsEqual(left.affectedProjects, right.affectedProjects)
+  && areStringArraysEqual(left.columnKeys, right.columnKeys)
   && left.cvssText === right.cvssText
   && left.expanded === right.expanded
   && left.idText === right.idText
@@ -63,11 +84,13 @@ export const areVulnRowViewModelsEqual = (left: VulnRowViewModel, right: VulnRow
   && left.titleText === right.titleText
   && left.triageLabel === right.triageLabel
   && left.triagePending === right.triagePending
-  && left.triageState === right.triageState;
+  && left.triageState === right.triageState
+  && areStringArraysEqual(left.unmappedSbomLabels, right.unmappedSbomLabels);
 
 export const buildVulnRowViewModel = (
   vulnerability: Vulnerability,
   options: {
+    affectedProjectResolution: AffectedProjectResolution;
     colorCodedSeverity: boolean;
     columns: readonly VulnerabilityRowColumn[];
     expanded: boolean;
@@ -78,6 +101,12 @@ export const buildVulnRowViewModel = (
     triageState: TriageState;
   }
 ): VulnRowViewModel => ({
+  affectedProjects: options.affectedProjectResolution.affectedProjects.map((project) => ({
+    notePath: sanitizeText(project.notePath),
+    sourceSbomLabels: project.sourceSbomLabels.map((label) => sanitizeText(label)),
+    status: project.status,
+    text: sanitizeText(project.displayName)
+  })),
   columnKeys: options.columns.map((column) => column.key),
   cvssText: vulnerability.cvssScore.toFixed(1),
   expanded: options.expanded,
@@ -100,5 +129,7 @@ export const buildVulnRowViewModel = (
   titleText: sanitizeText(vulnerability.title),
   triageLabel: formatTriageStateLabel(options.triageState),
   triagePending: options.triagePending,
-  triageState: options.triageState
+  triageState: options.triageState,
+  unmappedSbomLabels: options.affectedProjectResolution.unmappedSboms.map((sbom) => sanitizeText(sbom.sbomLabel))
 });
+

@@ -6,6 +6,7 @@ import type {
   NormalizedSeverity,
   NormalizedVulnerability
 } from '../../domain/sbom/types';
+import { PurlNormalizer } from '../../domain/services/PurlNormalizer';
 import type { ParseSbomJsonOptions } from './index';
 
 interface CycloneDxBom {
@@ -446,7 +447,7 @@ export const parseCycloneDxJson = (
       normalized.license = license;
     }
     if (purl) {
-      normalized.purl = purl;
+      normalized.purl = PurlNormalizer.normalize(purl)!;
     }
     if (cpe) {
       normalized.cpe = cpe;

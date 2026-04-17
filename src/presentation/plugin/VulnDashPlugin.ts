@@ -43,6 +43,13 @@ import type {
   VulnDashSettings
 } from '../../application/use-cases/types';
 import { buildSbomOverrideKey } from '../../application/use-cases/types';
+import { ResolveAffectedProjects, type ProjectNoteLookupResult } from '../../application/correlation/ResolveAffectedProjects';
+import { createProjectNoteReference } from '../../domain/correlation/ProjectNoteReference';
+import { createSbomProjectMapping } from '../../domain/correlation/SbomProjectMapping';
+import type { AffectedProjectResolution } from '../../domain/correlation/AffectedProjectResolution';
+import { SbomComponentIndex } from '../../infrastructure/correlation/SbomComponentIndex';
+import { ProjectNoteLookupService, type ProjectNoteOption } from '../../infrastructure/obsidian/ProjectNoteLookupService';
+import { SbomProjectMappingRepository } from '../../infrastructure/storage/SbomProjectMappingRepository';
 import { JoinTriageState, type JoinedTriageVulnerability } from '../../application/triage/JoinTriageState';
 import { SetTriageState } from '../../application/triage/SetTriageState';
 import { normalizeTriageFilterMode } from '../../application/triage/FilterByTriageState';
@@ -103,7 +110,7 @@ const DEFAULT_CACHE_STORAGE: CacheStorageSettings = {
   ttlMs: 30 * 24 * 60 * 60 * 1000
 };
 
-export const SETTINGS_VERSION = 6;
+export const SETTINGS_VERSION = 7;
 
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
@@ -207,6 +214,8 @@ const normalizeImportedSbomConfig = (
   const lastImportedAt = typeof sbom.lastImportedAt === 'number' && Number.isFinite(sbom.lastImportedAt)
     ? sbom.lastImportedAt
     : 0;
+  const linkedProjectNotePath = getTrimmedString(sbom.linkedProjectNotePath);
+  const linkedProjectDisplayName = getTrimmedString(sbom.linkedProjectDisplayName);
 
   const normalized: ImportedSbomConfig = {
     contentHash,
@@ -225,6 +234,12 @@ const normalizeImportedSbomConfig = (
   }
   if (lastError) {
     normalized.lastError = lastError;
+  }
+  if (linkedProjectNotePath) {
+    normalized.linkedProjectNotePath = normalizePath(linkedProjectNotePath);
+  }
+  if (linkedProjectDisplayName) {
+    normalized.linkedProjectDisplayName = linkedProjectDisplayName;
   }
 
   return normalized;
@@ -468,6 +483,18 @@ export default class VulnDashPlugin extends Plugin {
   private readonly sbomCatalogService = new SbomCatalogService();
   private readonly sbomComparisonService = new SbomComparisonService();
   private readonly sbomFilterMergeService = new SbomFilterMergeService();
+  private readonly sbomComponentIndex = new SbomComponentIndex();
+  private readonly sbomProjectMappingRepository = new SbomProjectMappingRepository(
+    () => this.settings.sboms,
+    async (sbomId, updates) => this.updateSbomConfig(sbomId, updates)
+  );
+  private readonly resolveAffectedProjects = new ResolveAffectedProjects(
+    this.sbomProjectMappingRepository,
+    {
+      getByPaths: async (references) => this.getProjectNoteLookupService().getByPaths(references)
+    }
+  );
+  private projectNoteLookupService: ProjectNoteLookupService | null = null;
   private sbomImportService: SbomImportService | null = null;
   private triageJoinUseCase: JoinTriageState | null = null;
   private triageSetUseCase: SetTriageState | null = null;
@@ -480,6 +507,7 @@ export default class VulnDashPlugin extends Plugin {
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private visibleVulnerabilities: Vulnerability[] = [];
+  private affectedProjectsByVulnerabilityRef = new Map<string, AffectedProjectResolution>();
   private previousVisibleIds = new Set<string>();
 
   public override async onload(): Promise<void> {
@@ -550,6 +578,37 @@ export default class VulnDashPlugin extends Plugin {
 
   public getSettings(): VulnDashSettings {
     return this.settings;
+  }
+
+  public listProjectNotes(): ProjectNoteOption[] {
+    return this.getProjectNoteLookupService().listProjectNotes();
+  }
+
+  public async getSbomProjectNoteStatuses(): Promise<Map<string, ProjectNoteLookupResult | null>> {
+    const results = await Promise.all(this.settings.sboms.map(async (sbom) => {
+      if (!sbom.linkedProjectNotePath) {
+        return [sbom.id, null] as const;
+      }
+
+      return [
+        sbom.id,
+        await this.getProjectNoteLookupService().resolveByPath(sbom.linkedProjectNotePath, sbom.linkedProjectDisplayName)
+      ] as const;
+    }));
+
+    return new Map(results);
+  }
+
+  public async linkSbomToProjectNote(sbomId: string, notePath: string): Promise<void> {
+    const noteState = await this.getProjectNoteLookupService().resolveByPath(notePath);
+    await this.sbomProjectMappingRepository.save(createSbomProjectMapping(
+      sbomId,
+      createProjectNoteReference(noteState.notePath, noteState.displayName)
+    ));
+  }
+
+  public async clearSbomProjectNote(sbomId: string): Promise<void> {
+    await this.sbomProjectMappingRepository.deleteBySbomId(sbomId);
   }
 
   public async togglePolling(): Promise<void> {
@@ -843,6 +902,66 @@ export default class VulnDashPlugin extends Plugin {
     });
   }
 
+  private buildSbomIdsBySourcePath(results: readonly SbomLoadResult[]): Map<string, string[]> {
+    const sbomIdsBySourcePath = new Map<string, Set<string>>();
+
+    for (const result of results) {
+      const state = result.success ? result.state : result.cachedState;
+      if (!state) {
+        continue;
+      }
+
+      const existing = sbomIdsBySourcePath.get(state.sourcePath) ?? new Set<string>();
+      existing.add(result.sbomId);
+      sbomIdsBySourcePath.set(state.sourcePath, existing);
+    }
+
+    return new Map(Array.from(sbomIdsBySourcePath.entries()).map(([sourcePath, sbomIds]) => [
+      sourcePath,
+      Array.from(sbomIds).sort((left, right) => left.localeCompare(right))
+    ] as const));
+  }
+
+  private async buildCorrelationWorkspace(vulnerabilities: readonly Vulnerability[]): Promise<{
+    componentIndex: ReturnType<SbomComponentIndex['build']>;
+    snapshot: ComponentInventoryWorkspaceSnapshot;
+  }> {
+    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
+    const inventory = this.componentInventoryService.buildSnapshot(this.settings, loadResults);
+    const relationships = this.componentVulnerabilityLinkService.buildGraph(
+      inventory.catalog.components,
+      [...vulnerabilities]
+    );
+
+    return {
+      componentIndex: this.sbomComponentIndex.build(
+        inventory.catalog.components,
+        this.buildSbomIdsBySourcePath(loadResults)
+      ),
+      snapshot: {
+        inventory,
+        relationships
+      }
+    };
+  }
+
+  private async resolveAffectedProjectMap(vulnerabilities: readonly Vulnerability[]): Promise<Map<string, AffectedProjectResolution>> {
+    if (vulnerabilities.length === 0) {
+      return new Map();
+    }
+
+    const workspace = await this.buildCorrelationWorkspace(vulnerabilities);
+    return this.resolveAffectedProjects.execute({
+      componentIndex: workspace.componentIndex,
+      relationships: workspace.snapshot.relationships,
+      sboms: this.settings.sboms.map((sbom) => ({
+        id: sbom.id,
+        label: sbom.label
+      })),
+      vulnerabilities
+    });
+  }
+
   private applySbomLoadResults(settings: VulnDashSettings, results: SbomLoadResult[]): VulnDashSettings {
     const resultMap = new Map(results.map((result) => [result.sbomId, result] as const));
 
@@ -907,6 +1026,7 @@ export default class VulnDashPlugin extends Plugin {
       const key = this.getVulnerabilityCacheKey(vulnerability);
       return [key, triageByKey.get(key) ?? this.createDefaultTriageState(vulnerability)] as const;
     }));
+    const affectedProjectsByVulnerabilityRef = await this.resolveAffectedProjectMap(filtered);
     const diagnostics = buildVisibilityDiagnostics(vulnerabilities, filtered);
     console.info('[vulndash.filter.visibility]', diagnostics);
 
@@ -923,7 +1043,8 @@ export default class VulnDashPlugin extends Plugin {
 
     this.previousVisibleIds = new Set(currentVisible.keys());
     this.visibleVulnerabilities = filtered;
-    this.updateView(filtered, filteredTriageByKey, {
+    this.affectedProjectsByVulnerabilityRef = affectedProjectsByVulnerabilityRef;
+    this.updateView(filtered, filteredTriageByKey, affectedProjectsByVulnerabilityRef, {
       added: newItems.map((vulnerability) => this.getVulnerabilityCacheKey(vulnerability)),
       removed: changedIds.removed,
       updated: [...changedIds.updated].filter((key) => currentVisible.has(key))
@@ -1263,13 +1384,14 @@ export default class VulnDashPlugin extends Plugin {
   private updateView(
     vulnerabilities: Vulnerability[],
     triageByKey: ReadonlyMap<string, VisibleTriageState>,
+    affectedProjectsByVulnerabilityRef: ReadonlyMap<string, AffectedProjectResolution>,
     changedIds: ChangedVulnerabilityIds = createEmptyChangedVulnerabilityIds()
   ): void {
     const leaves = this.app.workspace.getLeavesOfType(VULNDASH_VIEW_TYPE);
     for (const leaf of leaves) {
       const view = leaf.view;
       if (view instanceof VulnDashView) {
-        view.setData(vulnerabilities, triageByKey, changedIds);
+        view.setData(vulnerabilities, triageByKey, affectedProjectsByVulnerabilityRef, changedIds);
       }
     }
   }
@@ -1284,7 +1406,7 @@ export default class VulnDashPlugin extends Plugin {
     }
   }
 
-  private async openNotePath(notePath: string): Promise<void> {
+  public async openNotePath(notePath: string): Promise<void> {
     const normalized = normalizePath(notePath);
     const target = this.app.vault.getAbstractFileByPath(normalized);
 
@@ -1510,6 +1632,14 @@ export default class VulnDashPlugin extends Plugin {
     return this.sbomImportService;
   }
 
+  private getProjectNoteLookupService(): ProjectNoteLookupService {
+    if (!this.projectNoteLookupService) {
+      this.projectNoteLookupService = new ProjectNoteLookupService(this.app.vault);
+    }
+
+    return this.projectNoteLookupService;
+  }
+
   private registerMarkdownNotePathObservers(): void {
     const invalidateComponentNotePaths = (): void => {
       this.getSbomImportService().invalidateAllCaches();
@@ -1543,6 +1673,14 @@ export default class VulnDashPlugin extends Plugin {
     }));
   }
 }
+
+
+
+
+
+
+
+
 
 
 

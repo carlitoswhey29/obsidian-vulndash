@@ -1,4 +1,5 @@
 import { Modal, Notice, setIcon } from 'obsidian';
+import type { ProjectNoteLookupResult } from '../../application/correlation/ResolveAffectedProjects';
 import type { SbomFileChangeStatus } from '../../application/use-cases/SbomImportService';
 import type { ImportedSbomConfig } from '../../application/use-cases/types';
 import {
@@ -7,14 +8,31 @@ import {
   summarizeSbomWorkspace
 } from '../../application/use-cases/SbomWorkspaceService';
 import type VulnDashPlugin from '../plugin/VulnDashPlugin';
+import { ProjectNoteSuggestModal } from './ProjectNoteSuggestModal';
 import { SbomCompareModal } from './SbomCompareModal';
 import { SbomComponentsModal } from './SbomComponentsModal';
 import { SbomFileSuggestModal } from './SbomFileSuggestModal';
+
+export const saveSbomProjectNoteMapping = async (
+  plugin: Pick<VulnDashPlugin, 'linkSbomToProjectNote'>,
+  sbomId: string,
+  notePath: string
+): Promise<void> => {
+  await plugin.linkSbomToProjectNote(sbomId, notePath);
+};
+
+export const clearSbomProjectNoteMapping = async (
+  plugin: Pick<VulnDashPlugin, 'clearSbomProjectNote'>,
+  sbomId: string
+): Promise<void> => {
+  await plugin.clearSbomProjectNote(sbomId);
+};
 
 export class SbomManagerModal extends Modal {
   private renderId = 0;
   private searchQuery = '';
   private statusMap = new Map<string, SbomFileChangeStatus>();
+  private projectNoteStatusMap = new Map<string, ProjectNoteLookupResult | null>();
   private listHostEl: HTMLDivElement | null = null;
 
   public constructor(
@@ -32,12 +50,16 @@ export class SbomManagerModal extends Modal {
   private async renderAsync(): Promise<void> {
     const activeRenderId = ++this.renderId;
     const settings = this.plugin.getSettings();
-    const statuses = await this.plugin.getSbomFileStatuses();
+    const [statuses, projectNoteStatuses] = await Promise.all([
+      this.plugin.getSbomFileStatuses(),
+      this.plugin.getSbomProjectNoteStatuses()
+    ]);
     if (activeRenderId !== this.renderId) {
       return;
     }
 
     this.statusMap = statuses;
+    this.projectNoteStatusMap = projectNoteStatuses;
     const { contentEl } = this;
     contentEl.empty();
     this.listHostEl = null;
@@ -46,7 +68,7 @@ export class SbomManagerModal extends Modal {
     header.createEl('h2', { text: 'SBOM Manager' });
     header.createEl('p', {
       cls: 'vulndash-muted-copy',
-      text: 'Browse vault files, inspect components, sync changes, and compare SBOMs without cluttering plugin settings.'
+      text: 'Browse vault files, inspect components, sync changes, compare SBOMs, and map each workspace to an explicit project note.'
     });
 
     this.renderWorkspaceSummary(contentEl, settings.sboms);
@@ -104,6 +126,7 @@ export class SbomManagerModal extends Modal {
 
   private renderSbomCard(container: HTMLElement, sbom: ImportedSbomConfig): void {
     const fileStatus = describeSbomFileStatus(this.statusMap.get(sbom.id));
+    const projectNoteStatus = this.projectNoteStatusMap.get(sbom.id) ?? null;
     const card = container.createDiv({ cls: 'vulndash-sbom-workspace-card' });
 
     const header = card.createDiv({ cls: 'vulndash-sbom-card-header' });
@@ -120,6 +143,12 @@ export class SbomManagerModal extends Modal {
     if (sbom.lastError) {
       this.createBadge(badges, 'Attention needed', 'danger');
     }
+    if (projectNoteStatus?.status === 'broken') {
+      this.createBadge(badges, 'Project note missing', 'warning');
+    }
+    if (!sbom.linkedProjectNotePath) {
+      this.createBadge(badges, 'Unmapped findings', 'neutral');
+    }
 
     const metrics = card.createDiv({ cls: 'vulndash-sbom-metrics' });
     this.createMetric(metrics, 'Components', String(sbom.componentCount ?? 0));
@@ -132,6 +161,29 @@ export class SbomManagerModal extends Modal {
       cls: sbom.path ? 'vulndash-sbom-file-path' : 'vulndash-sbom-file-path is-empty',
       text: sbom.path || 'Choose a vault JSON file to connect this SBOM entry.'
     });
+
+    const projectPanel = card.createDiv({ cls: 'vulndash-sbom-file-panel' });
+    projectPanel.createDiv({ cls: 'vulndash-sbom-file-label', text: 'Mapped project note' });
+    projectPanel.createDiv({
+      cls: sbom.linkedProjectNotePath ? 'vulndash-sbom-file-path' : 'vulndash-sbom-file-path is-empty',
+      text: this.describeProjectNoteStatus(sbom, projectNoteStatus)
+    });
+
+    const projectActions = card.createDiv({ cls: 'vulndash-sbom-toolbar' });
+    this.createButton(projectActions, this.getProjectNoteActionLabel(sbom, projectNoteStatus), async () => {
+      this.openProjectNotePicker(sbom.id);
+    }, { cta: !sbom.linkedProjectNotePath });
+    this.createButton(projectActions, 'Open Project Note', async () => {
+      if (projectNoteStatus) {
+        await this.plugin.openNotePath(projectNoteStatus.notePath);
+      }
+    }, { disabled: projectNoteStatus?.status !== 'linked' });
+    this.createButton(projectActions, 'Clear Project Link', async () => {
+      await clearSbomProjectNoteMapping(this.plugin, sbom.id);
+      new Notice(`Cleared the project note mapping for ${sbom.label}.`);
+      this.onStateChanged?.();
+      await this.renderAsync();
+    }, { disabled: !sbom.linkedProjectNotePath, quiet: true });
 
     const primaryActions = card.createDiv({ cls: 'vulndash-sbom-toolbar' });
     this.createButton(primaryActions, sbom.path ? 'Change File' : 'Browse File', async () => {
@@ -394,6 +446,47 @@ export class SbomManagerModal extends Modal {
   private openSbomFilePicker(sbomId: string): void {
     new SbomFileSuggestModal(this.app, (file) => {
       void this.attachSbomFile(sbomId, file.path);
+    }).open();
+  }
+
+  private describeProjectNoteStatus(
+    sbom: ImportedSbomConfig,
+    status: ProjectNoteLookupResult | null
+  ): string {
+    if (!sbom.linkedProjectNotePath) {
+      return 'No project note mapped yet. Matching findings from this SBOM will remain unmapped.';
+    }
+
+    if (!status) {
+      return sbom.linkedProjectNotePath;
+    }
+
+    if (status.status === 'broken') {
+      return `${status.displayName} is missing at ${status.notePath}. Repair the mapping to restore project correlation.`;
+    }
+
+    return `${status.displayName} (${status.notePath})`;
+  }
+
+  private getProjectNoteActionLabel(
+    sbom: ImportedSbomConfig,
+    status: ProjectNoteLookupResult | null
+  ): string {
+    if (!sbom.linkedProjectNotePath) {
+      return 'Link Project Note';
+    }
+
+    return status?.status === 'broken' ? 'Repair Project Link' : 'Change Project Link';
+  }
+
+  private openProjectNotePicker(sbomId: string): void {
+    new ProjectNoteSuggestModal(this.app, this.plugin.listProjectNotes(), (note) => {
+      void (async () => {
+        await saveSbomProjectNoteMapping(this.plugin, sbomId, note.notePath);
+        new Notice(`Mapped ${note.displayName} to this SBOM.`);
+        this.onStateChanged?.();
+        await this.renderAsync();
+      })();
     }).open();
   }
 

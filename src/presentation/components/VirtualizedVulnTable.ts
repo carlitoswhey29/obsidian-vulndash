@@ -1,11 +1,13 @@
 import type { ChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
 import type { RelatedComponentSummary } from '../../application/sbom/types';
+import type { AffectedProjectResolution } from '../../domain/correlation/AffectedProjectResolution';
 import { createEmptyChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import type { TriageState } from '../../domain/triage/TriageState';
 import { buildRowPatchPlan } from '../rendering/RowPatchEngine';
 import { RowRegistry } from '../rendering/RowRegistry';
 import {
+  areAffectedProjectsEqual,
   areRelatedComponentsEqual,
   areVulnRowViewModelsEqual,
   buildVulnRowViewModel,
@@ -21,6 +23,7 @@ export type { VulnerabilityRowColumn, VulnerabilityRowColumnKey } from '../rende
 
 export interface VirtualizedVulnTableCallbacks {
   colorCodedSeverity: () => boolean;
+  getAffectedProjectResolution: (vulnerability: Vulnerability) => AffectedProjectResolution;
   getRelatedComponents: (vulnerability: Vulnerability) => readonly RelatedComponentSummary[];
   getRowKey: (vulnerability: Vulnerability) => string;
   getTriageState: (vulnerability: Vulnerability) => TriageState;
@@ -28,6 +31,7 @@ export interface VirtualizedVulnTableCallbacks {
   isNew: (vulnerabilityKey: string) => boolean;
   isTriagePending: (vulnerabilityKey: string) => boolean;
   onColumnSort: (columnKey: VulnerabilityRowColumnKey) => void;
+  onOpenAffectedProject: (notePath: string) => void;
   onTriageStateChange: (vulnerability: Vulnerability, state: TriageState) => void;
   onToggleExpanded: (vulnerability: Vulnerability, expanded: boolean) => void;
   renderSummary: (vulnerability: Vulnerability, containerEl: HTMLDivElement) => Promise<void>;
@@ -43,6 +47,7 @@ export interface VirtualizedVulnTableRenderState {
 }
 
 interface MountedVulnerabilityRow {
+  affectedProjectsSectionEl: HTMLDivElement | null;
   detailsCell: HTMLTableCellElement | null;
   detailsHeadingEl: HTMLHeadingElement | null;
   detailsRow: HTMLTableRowElement | null;
@@ -320,6 +325,7 @@ export class VirtualizedVulnTable {
     for (const vulnerability of visibleVulnerabilities) {
       const key = this.callbacks.getRowKey(vulnerability);
       const viewModel = buildVulnRowViewModel(vulnerability, {
+        affectedProjectResolution: this.callbacks.getAffectedProjectResolution(vulnerability),
         colorCodedSeverity: this.callbacks.colorCodedSeverity(),
         columns: this.currentRenderState.columns,
         expanded: this.callbacks.isExpanded(key),
@@ -355,6 +361,7 @@ export class VirtualizedVulnTable {
   private createMountedRow(vulnerability: Vulnerability, viewModel: VulnRowViewModel): MountedVulnerabilityRow {
     const documentRef = this.tableBodyEl?.ownerDocument ?? document;
     const mountedRow: MountedVulnerabilityRow = {
+      affectedProjectsSectionEl: null,
       detailsCell: null,
       detailsHeadingEl: null,
       detailsRow: null,
@@ -547,6 +554,7 @@ export class VirtualizedVulnTable {
       mountedRow.summaryEl = null;
       mountedRow.referenceSectionEl = null;
       mountedRow.relatedComponentsSectionEl = null;
+      mountedRow.affectedProjectsSectionEl = null;
       return;
     }
 
@@ -566,9 +574,11 @@ export class VirtualizedVulnTable {
       mountedRow.detailsCell.append(mountedRow.referenceSectionEl);
       mountedRow.relatedComponentsSectionEl = documentRef.createElement('div');
       mountedRow.detailsCell.append(mountedRow.relatedComponentsSectionEl);
+      mountedRow.affectedProjectsSectionEl = documentRef.createElement('div');
+      mountedRow.detailsCell.append(mountedRow.affectedProjectsSectionEl);
     }
 
-    if (!mountedRow.detailsRow || !mountedRow.detailsCell || !mountedRow.detailsHeadingEl || !mountedRow.summaryEl || !mountedRow.referenceSectionEl || !mountedRow.relatedComponentsSectionEl) {
+    if (!mountedRow.detailsRow || !mountedRow.detailsCell || !mountedRow.detailsHeadingEl || !mountedRow.summaryEl || !mountedRow.referenceSectionEl || !mountedRow.relatedComponentsSectionEl || !mountedRow.affectedProjectsSectionEl) {
       return;
     }
 
@@ -587,6 +597,10 @@ export class VirtualizedVulnTable {
 
     if (forceRefreshDetails || !areRelatedComponentsEqual(previousViewModel.relatedComponents, viewModel.relatedComponents)) {
       this.renderRelatedComponentsSection(mountedRow.relatedComponentsSectionEl, viewModel);
+    }
+
+    if (forceRefreshDetails || !areAffectedProjectsEqual(previousViewModel.affectedProjects, viewModel.affectedProjects) || previousViewModel.unmappedSbomLabels.length !== viewModel.unmappedSbomLabels.length || previousViewModel.unmappedSbomLabels.some((label, index) => label !== viewModel.unmappedSbomLabels[index])) {
+      this.renderAffectedProjectsSection(mountedRow.affectedProjectsSectionEl, viewModel);
     }
   }
 
@@ -621,6 +635,46 @@ export class VirtualizedVulnTable {
       list.createSpan({
         cls: 'vulndash-badge vulndash-badge-neutral',
         text: `${component.label} (${component.evidence})`
+      });
+    }
+  }
+
+  private renderAffectedProjectsSection(containerEl: HTMLDivElement, viewModel: VulnRowViewModel): void {
+    containerEl.empty();
+    containerEl.createEl('strong', { text: 'Affected Projects:' });
+
+    if (viewModel.affectedProjects.length === 0 && viewModel.unmappedSbomLabels.length === 0) {
+      containerEl.createEl('p', {
+        cls: 'vulndash-muted-copy',
+        text: 'No mapped internal project notes were resolved for this finding.'
+      });
+      return;
+    }
+
+    if (viewModel.affectedProjects.length > 0) {
+      const list = containerEl.createDiv({ cls: 'vulndash-component-chip-list' });
+      for (const project of viewModel.affectedProjects) {
+        if (project.status === 'linked') {
+          const button = list.createEl('button', { text: project.text });
+          button.addClass('mod-muted');
+          button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.callbacks.onOpenAffectedProject(project.notePath);
+          });
+        } else {
+          list.createSpan({
+            cls: 'vulndash-badge vulndash-badge-warning',
+            text: `${project.text} (missing)`
+          });
+        }
+      }
+    }
+
+    if (viewModel.unmappedSbomLabels.length > 0) {
+      containerEl.createEl('p', {
+        cls: 'vulndash-muted-copy',
+        text: `Unmapped SBOM workspaces: ${viewModel.unmappedSbomLabels.join(', ')}`
       });
     }
   }
@@ -708,6 +762,9 @@ export class VirtualizedVulnTable {
     }
   }
 }
+
+
+
 
 
 

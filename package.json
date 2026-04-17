@@ -1,6 +1,6 @@
 {
   "name": "obsidian-vulndash",
-  "version": "0.5.1",
+  "version": "0.6.1",
   "description": "Obsidian vulnerability dashboard plugin",
   "private": true,
   "main": "main.js",
@@ -33,10 +33,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/carlitoswhey29/obsidian-vulndash.git"
+    "url": "https://github.com/bam-caguilar/obsidian-vulndash.git"
   },
   "bugs": {
-    "url": "https://github.com/carlitoswhey29/obsidian-vulndash/issues"
+    "url": "https://github.com/bam-caguilar/obsidian-vulndash/issues"
   },
-  "homepage": "https://github.com/carlitoswhey29/obsidian-vulndash#readme"
+  "homepage": "https://github.com/bam-caguilar/obsidian-vulndash#readme"
 }
