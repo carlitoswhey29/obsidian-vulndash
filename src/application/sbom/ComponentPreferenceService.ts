@@ -1,4 +1,4 @@
-import type { VulnDashSettings } from '../services/types';
+import type { VulnDashSettings } from '../use-cases/types';
 import type { ComponentCatalog, TrackedComponent } from './types';
 
 type ComponentPreferenceSettings = Pick<VulnDashSettings, 'disabledSbomComponentKeys' | 'followedSbomComponentKeys'>;

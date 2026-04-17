@@ -1,4 +1,4 @@
-import { HttpRequestError } from '../../../application/ports/HttpRequestError';
+import { HttpRequestError } from '../../../application/ports/DataSourceError';
 import type { ClientLogger } from './ClientLogger';
 import type { ClientRequestContext } from './ClientRequestContext';
 import { normalizeRetryPolicy, type RetryPolicy } from './RetryPolicy';

@@ -5,8 +5,8 @@ import {
   buildVisibilityDiagnostics,
   getFailedFeedNames,
   summarizeSyncResults
-} from '../../../src/application/services/SyncOutcomeDiagnostics';
-import type { SyncResult } from '../../../src/application/services/PollingOrchestrator';
+} from '../../../src/application/use-cases/SyncOutcomeDiagnostics';
+import type { SyncResult } from '../../../src/application/use-cases/SyncJobScheduler';
 import type { Vulnerability } from '../../../src/domain/entities/Vulnerability';
 
 const makeResult = (result: Partial<SyncResult> & Pick<SyncResult, 'source' | 'success'>): SyncResult => ({

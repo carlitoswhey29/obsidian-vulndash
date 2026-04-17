@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SbomFilterMergeService } from '../../../src/application/services/SbomFilterMergeService';
+import { SbomFilterMergeService } from '../../../src/application/use-cases/SbomFilterMergeService';
 import type { NormalizedSbomDocument } from '../../../src/domain/sbom/types';
-import type { ImportedSbomConfig, RuntimeSbomState, VulnDashSettings } from '../../../src/application/services/types';
-import { buildSbomOverrideKey } from '../../../src/application/services/types';
+import type { ImportedSbomConfig, RuntimeSbomState, VulnDashSettings } from '../../../src/application/use-cases/types';
+import { buildSbomOverrideKey } from '../../../src/application/use-cases/types';
 
 const mergeService = new SbomFilterMergeService();
 const DEFAULT_SETTINGS: VulnDashSettings = {
@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS: VulnDashSettings = {
     cvssScore: true,
     publishedAt: true
   },
+  triageFilter: 'all',
   keywordRegexEnabled: false,
   enableNvdFeed: true,
   enableGithubFeed: true,
@@ -161,4 +162,6 @@ test('resolved components expose effective names without mutating runtime data',
   }]);
   assert.equal(runtimeState.components[0]?.normalizedName, 'Platform Api');
 });
+
+
 

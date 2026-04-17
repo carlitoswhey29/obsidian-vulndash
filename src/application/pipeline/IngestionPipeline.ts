@@ -6,13 +6,13 @@ import {
   RetryableNetworkError,
   ServerHttpError,
   TimeoutHttpError
-} from '../ports/HttpRequestError';
+} from '../ports/DataSourceError';
 import type {
   FetchVulnerabilityBatch,
   FetchVulnerabilityOptions,
   VulnerabilityFeed
 } from '../ports/VulnerabilityFeed';
-import type { SyncControls } from '../services/types';
+import type { SyncControls } from '../use-cases/types';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import type { PipelineEventListener } from './PipelineEvents';
 import type {

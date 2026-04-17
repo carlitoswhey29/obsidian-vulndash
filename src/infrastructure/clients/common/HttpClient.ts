@@ -1,12 +1,12 @@
 import { requestUrl } from 'obsidian';
-import type { HttpResponse, IHttpClient } from '../../../application/ports/IHttpClient';
+import type { HttpResponse, IHttpClient } from '../../../application/ports/HttpClient';
 import {
   ClientHttpError,
   RateLimitHttpError,
   RetryableNetworkError,
   ServerHttpError,
   TimeoutHttpError
-} from '../../../application/ports/HttpRequestError';
+} from '../../../application/ports/DataSourceError';
 
 const parseRetryAfterMs = (retryAfterHeader: string | undefined): number | undefined => {
   if (!retryAfterHeader) return undefined;

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ImportedSbomConfig } from '../../../src/application/services/types';
+import type { ImportedSbomConfig } from '../../../src/application/use-cases/types';
 import {
   describeSbomFileStatus,
   filterSbomComparisonResult,
   sortSbomFileCandidates,
   summarizeSbomWorkspace
-} from '../../../src/application/services/SbomWorkspaceService';
+} from '../../../src/application/use-cases/SbomWorkspaceService';
 
 const createSbom = (overrides: Partial<ImportedSbomConfig> = {}): ImportedSbomConfig => ({
   contentHash: '',

@@ -1,5 +1,5 @@
-import type { SbomLoadResult } from '../services/SbomImportService';
-import type { VulnDashSettings } from '../services/types';
+import type { SbomLoadResult } from '../use-cases/SbomImportService';
+import type { VulnDashSettings } from '../use-cases/types';
 import { ComponentPreferenceService } from './ComponentPreferenceService';
 import { SbomCatalogService } from './SbomCatalogService';
 import type {

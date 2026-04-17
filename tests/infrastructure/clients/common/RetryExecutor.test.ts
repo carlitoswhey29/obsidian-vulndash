@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ClientHttpError, RateLimitHttpError, RetryableNetworkError } from '../../../../src/application/ports/HttpRequestError';
+import { ClientHttpError, RateLimitHttpError, RetryableNetworkError } from '../../../../src/application/ports/DataSourceError';
 import { NoopClientLogger } from '../../../../src/infrastructure/clients/common/ClientLogger';
 import { RetryExecutor } from '../../../../src/infrastructure/clients/common/RetryExecutor';
 

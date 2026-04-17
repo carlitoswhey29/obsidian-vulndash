@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHubRepoClient } from '../../../../src/infrastructure/clients/github/GitHubRepoClient';
-import type { HttpResponse, IHttpClient } from '../../../../src/application/ports/IHttpClient';
+import type { HttpResponse, IHttpClient } from '../../../../src/application/ports/HttpClient';
 
 const controls = { maxPages: 5, maxItems: 100 };
 

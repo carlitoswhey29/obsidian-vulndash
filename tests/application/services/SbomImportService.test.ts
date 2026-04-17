@@ -3,8 +3,8 @@ import test from 'node:test';
 import {
   SbomImportService,
   type SbomComponentNotePathResolverFactory
-} from '../../../src/application/services/SbomImportService';
-import type { ImportedSbomConfig } from '../../../src/application/services/types';
+} from '../../../src/application/use-cases/SbomImportService';
+import type { ImportedSbomConfig } from '../../../src/application/use-cases/types';
 
 class InMemorySbomReader {
   private readonly files: Record<string, string>;

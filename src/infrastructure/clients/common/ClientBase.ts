@@ -1,4 +1,4 @@
-import type { HttpResponse, IHttpClient } from '../../../application/ports/IHttpClient';
+import type { HttpResponse, IHttpClient } from '../../../application/ports/HttpClient';
 import type { ClientLogger } from './ClientLogger';
 import { NoopClientLogger } from './ClientLogger';
 import type { ClientRequestContext } from './ClientRequestContext';

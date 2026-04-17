@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { LegacyDataMigration } from '../../../src/infrastructure/storage/LegacyDataMigration';
-import type { FeedConfig } from '../../../src/application/services/types';
+import type { FeedConfig } from '../../../src/application/use-cases/types';
 import type { Vulnerability } from '../../../src/domain/entities/Vulnerability';
 
 class FakeCacheRepository {

@@ -1,4 +1,4 @@
-import { parseSbomJson } from '../../domain/sbom/parser';
+import { parseSbomJson } from '../parsers';
 import type { AsyncTaskRequestMessage, AsyncTaskResponseMessage, ParseSbomTaskRequest } from '../async/AsyncTaskTypes';
 
 const toErrorMessage = (error: unknown): string => {

@@ -4,9 +4,9 @@ import type {
   VulnerabilityMetadata,
   VulnerabilitySourceUrls
 } from '../../../domain/entities/Vulnerability';
-import { classifySeverity } from '../../../domain/services/Cvss';
+import { classifySeverity } from '../../../domain/value-objects/CvssScore';
 import { ProductNameNormalizer } from '../../../domain/services/ProductNameNormalizer';
-import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../security/sanitize';
 import type {
   NvdConfigurationNode,
   NvdCpeMatch,

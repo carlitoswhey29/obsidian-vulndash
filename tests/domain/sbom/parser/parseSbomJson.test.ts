@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseSbomJson } from '../../../../src/domain/sbom/parser';
+import { parseSbomJson } from '../../../../src/infrastructure/parsers';
 
 const createSource = (path: string) => ({
   basename: path.split('/').at(-1)?.replace(/\.[^.]+$/, '') ?? 'sbom',
