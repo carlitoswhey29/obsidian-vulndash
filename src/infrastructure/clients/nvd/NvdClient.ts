@@ -1,5 +1,5 @@
-import { AuthFailureHttpError, ClientHttpError } from '../../../application/ports/HttpRequestError';
-import type { HttpResponse, IHttpClient } from '../../../application/ports/IHttpClient';
+import { AuthFailureHttpError, ClientHttpError } from '../../../application/ports/DataSourceError';
+import type { HttpResponse, IHttpClient } from '../../../application/ports/HttpClient';
 import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../../domain/entities/Vulnerability';
 import { ClientBase, type FeedSyncControls } from '../common/ClientBase';

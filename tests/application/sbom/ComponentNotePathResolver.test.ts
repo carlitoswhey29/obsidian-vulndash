@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ComponentNotePathResolver } from '../../../src/application/sbom/ComponentNotePathResolver';
+import { ComponentNotePathResolver } from '../../../src/application/sbom/ComponentStorageResolver';
 
 test('prefers exact semantic identifier matches before title-based fallback', () => {
   const resolver = new ComponentNotePathResolver([

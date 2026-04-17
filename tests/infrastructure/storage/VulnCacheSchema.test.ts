@@ -16,8 +16,11 @@ class FakeDomStringList {
 
 class FakeStore {
   public readonly indexNames = new FakeDomStringList();
+  public readonly keyPath: string | string[] | null;
 
-  public constructor(public readonly keyPath: string | string[] | null) {}
+  public constructor(keyPath: string | string[] | null) {
+    this.keyPath = keyPath;
+  }
 
   public createIndex(name: string): void {
     this.indexNames.add(name);
@@ -47,10 +50,10 @@ class FakeDatabase {
   }
 }
 
-test('schema upgrade creates vulnerability and sync metadata stores with required indexes', () => {
+test('schema upgrade creates vulnerability, triage, and sync metadata stores with required indexes', () => {
   const database = new FakeDatabase();
 
-  applyVulnCacheSchemaUpgrade(database as unknown as IDBDatabase, 0, 1);
+  applyVulnCacheSchemaUpgrade(database as unknown as IDBDatabase, 0, 2);
 
   const vulnerabilities = database.getStore(VULN_CACHE_STORES.vulnerabilities);
   assert.ok(vulnerabilities);
@@ -58,6 +61,11 @@ test('schema upgrade creates vulnerability and sync metadata stores with require
   assert.equal(vulnerabilities?.indexNames.contains(VULN_CACHE_INDEXES.bySourceId), true);
   assert.equal(vulnerabilities?.indexNames.contains(VULN_CACHE_INDEXES.byLastSeenAt), true);
   assert.equal(vulnerabilities?.indexNames.contains(VULN_CACHE_INDEXES.byRetentionRank), true);
+  const triageRecords = database.getStore(VULN_CACHE_STORES.triageRecords);
+  assert.ok(triageRecords);
+  assert.equal(triageRecords?.keyPath, 'correlationKey');
+  assert.equal(triageRecords?.indexNames.contains(VULN_CACHE_INDEXES.triageByState), true);
+  assert.equal(triageRecords?.indexNames.contains(VULN_CACHE_INDEXES.triageByUpdatedAt), true);
   assert.ok(database.getStore(VULN_CACHE_STORES.syncMetadata));
   assert.ok(database.getStore(VULN_CACHE_STORES.databaseMetadata));
 });

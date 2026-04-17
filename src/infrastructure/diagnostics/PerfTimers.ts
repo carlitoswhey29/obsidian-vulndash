@@ -1,5 +1,4 @@
 import { PerfDebugState } from './PerfDebugState';
-import { PerfThresholds } from './PerfThresholds';
 
 export class PerfTimers {
     /**
@@ -51,3 +50,4 @@ export class PerfTimers {
         }
     }
 }
+

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SbomComparisonService } from '../../../src/application/services/SbomComparisonService';
+import { SbomComparisonService } from '../../../src/application/use-cases/SbomComparisonService';
 
 const comparisonService = new SbomComparisonService();
 

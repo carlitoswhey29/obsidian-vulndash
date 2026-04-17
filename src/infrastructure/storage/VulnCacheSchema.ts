@@ -1,18 +1,22 @@
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
+import type { TriageRecord } from '../../domain/triage/TriageRecord';
 
 export const VULN_CACHE_DB_NAME = 'vulndash-cache';
-export const VULN_CACHE_DB_VERSION = 1;
+export const VULN_CACHE_DB_VERSION = 2;
 
 export const VULN_CACHE_STORES = {
   databaseMetadata: 'database-metadata',
   syncMetadata: 'sync-metadata',
+  triageRecords: 'triage-records',
   vulnerabilities: 'vulnerabilities'
 } as const;
 
 export const VULN_CACHE_INDEXES = {
   byLastSeenAt: 'by-last-seen-at',
   byRetentionRank: 'by-retention-rank',
-  bySourceId: 'by-source-id'
+  bySourceId: 'by-source-id',
+  triageByState: 'triage-by-state',
+  triageByUpdatedAt: 'triage-by-updated-at'
 } as const;
 
 export interface PersistedVulnerabilityRecord {
@@ -26,6 +30,18 @@ export interface PersistedVulnerabilityRecord {
   readonly sourceId: string;
   readonly vulnerability: Vulnerability;
   readonly vulnerabilityId: string;
+}
+
+export interface PersistedTriageRecord {
+  readonly correlationKey: string;
+  readonly vulnerabilityId: string;
+  readonly source: string;
+  readonly state: string;
+  readonly updatedAt: string;
+  readonly updatedAtMs: number;
+  readonly reason?: string;
+  readonly ticketRef?: string;
+  readonly updatedBy?: string;
 }
 
 export interface PersistedSyncMetadataRecord {
@@ -146,6 +162,18 @@ export const createPersistedVulnerabilityRecord = (
   };
 };
 
+export const createPersistedTriageRecord = (record: TriageRecord): PersistedTriageRecord => ({
+  correlationKey: record.correlationKey,
+  vulnerabilityId: record.vulnerabilityId,
+  source: record.source,
+  state: record.state,
+  updatedAt: record.updatedAt,
+  updatedAtMs: Number.isFinite(Date.parse(record.updatedAt)) ? Date.parse(record.updatedAt) : 0,
+  ...(record.reason ? { reason: record.reason } : {}),
+  ...(record.ticketRef ? { ticketRef: record.ticketRef } : {}),
+  ...(record.updatedBy ? { updatedBy: record.updatedBy } : {})
+});
+
 export const comparePersistedRecordsForHardCap = (
   left: Pick<PersistedVulnerabilityRecord, 'cacheKey' | 'freshnessPublishedAtMs' | 'freshnessUpdatedAtMs' | 'lastSeenAtMs'>,
   right: Pick<PersistedVulnerabilityRecord, 'cacheKey' | 'freshnessPublishedAtMs' | 'freshnessUpdatedAtMs' | 'lastSeenAtMs'>
@@ -173,4 +201,10 @@ export const applyVulnCacheSchemaUpgrade = (
   ensureStore(database as SchemaDatabase, VULN_CACHE_STORES.databaseMetadata, {
     keyPath: 'key'
   });
+
+  const triageRecords = ensureStore(database as SchemaDatabase, VULN_CACHE_STORES.triageRecords, {
+    keyPath: 'correlationKey'
+  });
+  ensureIndex(triageRecords, VULN_CACHE_INDEXES.triageByState, 'state', { unique: false });
+  ensureIndex(triageRecords, VULN_CACHE_INDEXES.triageByUpdatedAt, 'updatedAtMs', { unique: false });
 };

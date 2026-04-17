@@ -1071,3 +1071,65 @@
 }
 
 
+
+.vulndash-triage-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+}
+
+.vulndash-triage-filter-select,
+.vulndash-triage-select {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 30px;
+  padding: 4px 12px;
+}
+
+.vulndash-inline-triage {
+  margin-left: 10px;
+  max-width: 150px;
+}
+
+.vulndash-triage-pill {
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+
+.vulndash-triage-select.is-pending {
+  opacity: 0.7;
+}
+
+.vulndash-triage-state-active {
+  background: rgba(180, 73, 65, 0.14);
+  border-color: rgba(180, 73, 65, 0.35);
+  color: #8b2f2b;
+}
+
+.vulndash-triage-state-investigating {
+  background: rgba(198, 124, 23, 0.16);
+  border-color: rgba(198, 124, 23, 0.38);
+  color: #8a4b06;
+}
+
+.vulndash-triage-state-accepted_risk {
+  background: rgba(90, 93, 183, 0.15);
+  border-color: rgba(90, 93, 183, 0.32);
+  color: #34389d;
+}
+
+.vulndash-triage-state-mitigated {
+  background: rgba(47, 128, 90, 0.15);
+  border-color: rgba(47, 128, 90, 0.34);
+  color: #256246;
+}
+
+.vulndash-triage-state-false_positive,
+.vulndash-triage-state-suppressed {
+  background: rgba(89, 97, 112, 0.15);
+  border-color: rgba(89, 97, 112, 0.3);
+  color: #4d5563;
+}

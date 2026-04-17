@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { IHttpClient, HttpResponse } from '../../../src/application/ports/IHttpClient';
-import { buildFeedsFromConfig } from '../../../src/application/services/FeedFactory';
-import type { FeedConfig } from '../../../src/application/services/types';
+import type { IHttpClient, HttpResponse } from '../../../src/application/ports/HttpClient';
+import { buildFeedsFromConfig } from '../../../src/infrastructure/factories/FeedFactory';
+import type { FeedConfig } from '../../../src/application/use-cases/types';
 
 const httpClient: IHttpClient = {
   async getJson<T>(): Promise<HttpResponse<T>> {

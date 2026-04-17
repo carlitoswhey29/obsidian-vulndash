@@ -1,8 +1,8 @@
-import type { IHttpClient } from '../../../application/ports/IHttpClient';
+import type { IHttpClient } from '../../../application/ports/HttpClient';
 import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../../domain/entities/Vulnerability';
-import { classifySeverity } from '../../../domain/services/Cvss';
-import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../utils/sanitize';
+import { classifySeverity } from '../../../domain/value-objects/CvssScore';
+import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../security/sanitize';
 import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
 
 type GenericSeverity = 'none' | 'low' | 'medium' | 'high' | 'critical';

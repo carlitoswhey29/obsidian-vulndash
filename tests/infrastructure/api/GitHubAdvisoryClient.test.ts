@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHubAdvisoryClient, extractNextLink } from '../../../src/infrastructure/clients/github/GitHubAdvisoryClient';
-import type { HttpResponse, IHttpClient } from '../../../src/application/ports/IHttpClient';
-import { AuthFailureHttpError, ClientHttpError, RateLimitHttpError } from '../../../src/application/ports/HttpRequestError';
-import { PollingOrchestrator } from '../../../src/application/services/PollingOrchestrator';
+import type { HttpResponse, IHttpClient } from '../../../src/application/ports/HttpClient';
+import { AuthFailureHttpError, ClientHttpError, RateLimitHttpError } from '../../../src/application/ports/DataSourceError';
+import { PollingOrchestrator } from '../../../src/application/use-cases/SyncJobScheduler';
 import type { VulnerabilityFeed } from '../../../src/application/ports/VulnerabilityFeed';
 
 test('extractNextLink parses GitHub Link header', () => {

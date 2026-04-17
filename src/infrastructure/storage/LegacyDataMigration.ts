@@ -1,4 +1,4 @@
-import type { FeedConfig } from '../../application/services/types';
+import type { FeedConfig } from '../../application/use-cases/types';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { SyncMetadataRepository } from './SyncMetadataRepository';
 import { VulnCacheRepository } from './VulnCacheRepository';

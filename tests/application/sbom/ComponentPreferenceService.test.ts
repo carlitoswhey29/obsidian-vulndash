@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ComponentPreferenceService } from '../../../src/application/sbom/ComponentPreferenceService';
 import type { ComponentCatalog } from '../../../src/application/sbom/types';
-import type { VulnDashSettings } from '../../../src/application/services/types';
+import type { VulnDashSettings } from '../../../src/application/use-cases/types';
 
 const service = new ComponentPreferenceService();
 
