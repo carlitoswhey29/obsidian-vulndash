@@ -1,25 +1,33 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
 import type { ChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
-import { buildVulnerabilityCacheKey } from '../../application/pipeline/PipelineTypes';
-import type { ComponentInventoryWorkspaceSnapshot, RelatedComponentSummary } from '../../application/sbom/types';
+import { buildVulnerabilityCacheKey, createEmptyChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
+import type { ComponentInventoryWorkspaceSnapshot } from '../../application/sbom/types';
 import type { DashboardSortOrder, VulnDashSettings } from '../../application/services/types';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { severityOrder } from '../../domain/entities/Severity';
 import { ComponentInventoryView } from '../../ui/components/ComponentInventoryView';
 import {
-  type VulnerabilityTableColumn,
-  type VulnerabilityTableColumnKey,
+  type VulnerabilityRowColumn,
+  type VulnerabilityRowColumnKey,
   VirtualizedVulnTable
 } from '../../ui/components/VirtualizedVulnTable';
 
 export const VULNDASH_VIEW_TYPE = 'vulndash-dashboard-view';
 
-type SortKey = VulnerabilityTableColumnKey;
+type SortKey = VulnerabilityRowColumnKey;
 type VulnDashTab = 'components' | 'vulnerabilities';
+
+const EMPTY_CHANGE_HINTS = createEmptyChangedVulnerabilityIds();
 
 const compareStrings = (left: string, right: string): number => left.localeCompare(right);
 
 const compareNumbers = (left: number, right: number): number => left - right;
+
+const createSingleUpdatedHint = (key: string): ChangedVulnerabilityIds => ({
+  added: [],
+  removed: [],
+  updated: [key]
+});
 
 export class VulnDashView extends ItemView {
   private activeTab: VulnDashTab = 'vulnerabilities';
@@ -27,16 +35,18 @@ export class VulnDashView extends ItemView {
   private componentWorkspaceSnapshot: ComponentInventoryWorkspaceSnapshot | null = null;
   private readonly componentInventoryView: ComponentInventoryView;
   private componentPanelEl: HTMLDivElement | null = null;
-  private vulnerabilityPanelEl: HTMLDivElement | null = null;
-  private vulnerabilityResultsEl: HTMLDivElement | null = null;
-  private vulnerabilityToolbarEl: HTMLDivElement | null = null;
-  private vulnerabilities: Vulnerability[] = [];
-  private newItems = new Set<string>();
-  private expandedItems = new Set<string>();
-  private relatedComponentsByVulnerability: ReadonlyMap<string, RelatedComponentSummary[]> = new Map();
-  private sortKey: SortKey = 'publishedAt';
-  private sortDesc = true;
+  private readonly loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
+  private localSearchQuery = '';
+  private filterDebounceHandle: number | null = null;
   private maxResults = 100;
+  private newItems = new Set<string>();
+  private readonly openNotePath: (notePath: string) => Promise<void>;
+  private pollingButton: HTMLButtonElement | null = null;
+  private relatedComponentsByVulnerability: ComponentInventoryWorkspaceSnapshot['relationships']['componentsByVulnerability'] = new Map();
+  private searchInputEl: HTMLInputElement | null = null;
+  private sortDesc = true;
+  private sortKey: SortKey = 'publishedAt';
+  private tabButtons = new Map<VulnDashTab, HTMLButtonElement>();
   private colorCodedSeverity = true;
   private columnVisibility: VulnDashSettings['columnVisibility'] = {
     id: true,
@@ -46,13 +56,12 @@ export class VulnDashView extends ItemView {
     cvssScore: true,
     publishedAt: true
   };
-  private localSearchQuery = '';
-  private filterDebounceHandle: number | null = null;
-  private readonly loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
-  private readonly openNotePath: (notePath: string) => Promise<void>;
-  private pollingButton: HTMLButtonElement | null = null;
-  private tabButtons = new Map<VulnDashTab, HTMLButtonElement>();
+  private expandedItems = new Set<string>();
+  private vulnerabilities: Vulnerability[] = [];
+  private vulnerabilityPanelEl: HTMLDivElement | null = null;
+  private vulnerabilityResultsEl: HTMLDivElement | null = null;
   private vulnerabilityRenderToken = 0;
+  private vulnerabilityToolbarEl: HTMLDivElement | null = null;
   private readonly vulnerabilityTable: VirtualizedVulnTable;
 
   public constructor(
@@ -84,6 +93,10 @@ export class VulnDashView extends ItemView {
     });
     this.vulnerabilityTable = new VirtualizedVulnTable({
       colorCodedSeverity: () => this.colorCodedSeverity,
+      getRelatedComponents: (vulnerability) => {
+        const vulnerabilityRef = `${vulnerability.source.trim().toLowerCase()}::${vulnerability.id.trim().toLowerCase()}`;
+        return this.relatedComponentsByVulnerability.get(vulnerabilityRef) ?? [];
+      },
       getRowKey: (vulnerability) => this.getVulnerabilityKey(vulnerability),
       isExpanded: (vulnerabilityKey) => this.expandedItems.has(vulnerabilityKey),
       isNew: (vulnerabilityKey) => this.newItems.has(vulnerabilityKey),
@@ -94,7 +107,10 @@ export class VulnDashView extends ItemView {
           this.sortKey = columnKey;
           this.sortDesc = true;
         }
-        void this.renderVulnerabilityPanel();
+        void this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
+          forcePatchAll: false,
+          reloadRelationships: false
+        });
       },
       onToggleExpanded: (vulnerability, expanded) => {
         const vulnerabilityKey = this.getVulnerabilityKey(vulnerability);
@@ -103,10 +119,10 @@ export class VulnDashView extends ItemView {
         } else {
           this.expandedItems.delete(vulnerabilityKey);
         }
-        this.vulnerabilityTable.render(this.buildVulnerabilityTableState());
-      },
-      renderRelatedComponents: (containerEl, vulnerability) => {
-        this.renderRelatedComponents(containerEl, vulnerability, this.relatedComponentsByVulnerability);
+        this.vulnerabilityTable.render(this.buildVulnerabilityTableState(), {
+          changedIds: createSingleUpdatedHint(vulnerabilityKey),
+          forcePatchAll: false
+        });
       },
       renderSummary: async (vulnerability, containerEl) => this.renderSummaryIfNeeded(vulnerability, containerEl)
     });
@@ -143,6 +159,15 @@ export class VulnDashView extends ItemView {
     this.componentWorkspaceDirty = true;
     this.componentWorkspaceSnapshot = null;
     this.componentInventoryView.invalidate();
+
+    if (this.activeTab === 'vulnerabilities') {
+      void this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
+        forcePatchAll: true,
+        reloadRelationships: false
+      });
+      return;
+    }
+
     void this.renderActiveTab();
   }
 
@@ -154,11 +179,12 @@ export class VulnDashView extends ItemView {
 
   public setData(
     vulnerabilities: Vulnerability[],
-    changedIds: ChangedVulnerabilityIds = { added: [], removed: [], updated: [] }
+    changedIds: ChangedVulnerabilityIds = EMPTY_CHANGE_HINTS
   ): void {
     const hasChangeHints = changedIds.added.length > 0 || changedIds.updated.length > 0 || changedIds.removed.length > 0;
     const current = new Set(vulnerabilities.map((vulnerability) => this.getVulnerabilityKey(vulnerability)));
 
+    this.newItems = new Set(Array.from(this.newItems).filter((key) => current.has(key)));
     if (hasChangeHints) {
       for (const key of changedIds.added) {
         this.newItems.add(key);
@@ -173,15 +199,17 @@ export class VulnDashView extends ItemView {
       }
     }
 
-    this.expandedItems = new Set(
-      Array.from(this.expandedItems).filter((id) => current.has(id))
-    );
+    this.expandedItems = new Set(Array.from(this.expandedItems).filter((id) => current.has(id)));
     this.vulnerabilities = vulnerabilities;
     this.componentWorkspaceDirty = true;
     this.componentWorkspaceSnapshot = null;
+    this.componentInventoryView.invalidate();
 
     if (this.activeTab === 'vulnerabilities') {
-      void this.renderVulnerabilityPanel();
+      void this.refreshVulnerabilityTable(changedIds, {
+        forcePatchAll: false,
+        reloadRelationships: true
+      });
     }
   }
 
@@ -221,6 +249,7 @@ export class VulnDashView extends ItemView {
     this.vulnerabilityPanelEl = contentEl.createDiv({ cls: 'vulndash-vulnerability-panel' });
     this.vulnerabilityToolbarEl = this.vulnerabilityPanelEl.createDiv({ cls: 'vulndash-vulnerability-toolbar-host' });
     this.vulnerabilityResultsEl = this.vulnerabilityPanelEl.createDiv({ cls: 'vulndash-vulnerability-results' });
+    this.mountVulnerabilityToolbar();
     this.vulnerabilityTable.mount(this.vulnerabilityResultsEl);
 
     this.componentPanelEl = contentEl.createDiv({ cls: 'vulndash-component-panel' });
@@ -228,109 +257,8 @@ export class VulnDashView extends ItemView {
     this.updateTabButtons();
   }
 
-  private createTabButton(containerEl: HTMLElement, tab: VulnDashTab, label: string): void {
-    const button = containerEl.createEl('button', { text: label });
-    button.addClass('vulndash-tab-button');
-    button.addEventListener('click', () => {
-      this.activeTab = tab;
-      this.updateTabButtons();
-      void this.renderActiveTab();
-    });
-    this.tabButtons.set(tab, button);
-  }
-
-  private updateTabButtons(): void {
-    for (const [tab, button] of this.tabButtons) {
-      button.toggleClass('is-active', tab === this.activeTab);
-    }
-  }
-
-  private async loadComponentWorkspaceSnapshot(
-    loader: () => Promise<ComponentInventoryWorkspaceSnapshot>
-  ): Promise<ComponentInventoryWorkspaceSnapshot> {
-    if (!this.componentWorkspaceDirty && this.componentWorkspaceSnapshot) {
-      return this.componentWorkspaceSnapshot;
-    }
-
-    const snapshot = await loader();
-    this.componentWorkspaceSnapshot = snapshot;
-    this.componentWorkspaceDirty = false;
-    return snapshot;
-  }
-
-  private async renderActiveTab(): Promise<void> {
-    if (!this.vulnerabilityPanelEl || !this.componentPanelEl) {
-      return;
-    }
-
-    if (this.activeTab === 'vulnerabilities') {
-      this.vulnerabilityPanelEl.style.display = '';
-      this.componentPanelEl.style.display = 'none';
-      await this.componentInventoryView.setActive(false);
-      await this.renderVulnerabilityPanel();
-      return;
-    }
-
-    this.vulnerabilityPanelEl.style.display = 'none';
-    this.componentPanelEl.style.display = '';
-    await this.componentInventoryView.setActive(true);
-  }
-
-  private getDefaultSort(sortOrder: DashboardSortOrder): SortKey {
-    if (sortOrder === 'cvssScore') {
-      return 'cvssScore';
-    }
-
-    return 'publishedAt';
-  }
-
-  private async renderVulnerabilityPanel(): Promise<void> {
-    if (!this.vulnerabilityToolbarEl || !this.vulnerabilityResultsEl) {
-      return;
-    }
-
-    const activeToken = ++this.vulnerabilityRenderToken;
-    const componentWorkspaceSnapshot = await this.loadComponentWorkspaceSnapshot(this.loadComponentInventory);
-    if (activeToken !== this.vulnerabilityRenderToken) {
-      return;
-    }
-
-    this.relatedComponentsByVulnerability = componentWorkspaceSnapshot.relationships.componentsByVulnerability;
-    this.renderVulnerabilityToolbar();
-    this.vulnerabilityTable.render(this.buildVulnerabilityTableState());
-  }
-
-  private renderVulnerabilityToolbar(): void {
-    if (!this.vulnerabilityToolbarEl) {
-      return;
-    }
-
-    this.vulnerabilityToolbarEl.empty();
-    const filterBar = this.vulnerabilityToolbarEl.createDiv({ cls: 'vulndash-vulnerability-toolbar vulndash-card-shell' });
-    const searchField = filterBar.createDiv({ cls: 'vulndash-vulnerability-search' });
-    searchField.createEl('label', { text: 'Search vulnerabilities' });
-    const searchInput = searchField.createEl('input', {
-      attr: {
-        placeholder: 'Filter by title, ID, or source',
-        type: 'search'
-      },
-      cls: 'vulndash-search-bar'
-    });
-    searchInput.value = this.localSearchQuery;
-    searchInput.addEventListener('input', (event) => {
-      this.localSearchQuery = (event.target as HTMLInputElement).value.toLowerCase();
-      if (this.filterDebounceHandle !== null) {
-        window.clearTimeout(this.filterDebounceHandle);
-      }
-      this.filterDebounceHandle = window.setTimeout(() => {
-        this.filterDebounceHandle = null;
-        void this.renderVulnerabilityPanel();
-      }, 250);
-    });
-  }
-
   private buildVulnerabilityTableState(): {
-    columns: readonly VulnerabilityTableColumn[];
+    columns: readonly VulnerabilityRowColumn[];
     emptyState?: {
       body: string;
       title: string;
@@ -359,17 +287,23 @@ export class VulnDashView extends ItemView {
     };
   }
 
-  private getVisibleColumns(): VulnerabilityTableColumn[] {
-    const columns: VulnerabilityTableColumn[] = [
-      { key: 'id', label: 'ID' },
-      { key: 'title', label: 'Title' },
-      { key: 'source', label: 'Source' },
-      { key: 'severity', label: 'Severity' },
-      { key: 'cvssScore', label: 'CVSS' },
-      { key: 'publishedAt', label: 'Published' }
-    ];
+  private createTabButton(containerEl: HTMLElement, tab: VulnDashTab, label: string): void {
+    const button = containerEl.createEl('button', { text: label });
+    button.addClass('vulndash-tab-button');
+    button.addEventListener('click', () => {
+      this.activeTab = tab;
+      this.updateTabButtons();
+      void this.renderActiveTab();
+    });
+    this.tabButtons.set(tab, button);
+  }
 
-    return columns.filter((column) => this.columnVisibility[column.key]);
+  private getDefaultSort(sortOrder: DashboardSortOrder): SortKey {
+    if (sortOrder === 'cvssScore') {
+      return 'cvssScore';
+    }
+
+    return 'publishedAt';
   }
 
   private getFilteredVulnerabilities(): Vulnerability[] {
@@ -385,53 +319,8 @@ export class VulnDashView extends ItemView {
     return data;
   }
 
-  private async renderSummaryIfNeeded(vulnerability: Vulnerability, container: HTMLDivElement): Promise<void> {
-    if (container.childElementCount > 0 || !container.isConnected) {
-      return;
-    }
-
-    const activeToken = this.vulnerabilityRenderToken;
-    await MarkdownRenderer.render(this.app, vulnerability.summary, container, '', this);
-    if (activeToken !== this.vulnerabilityRenderToken && container.isConnected) {
-      container.empty();
-    }
-  }
-
-  private renderRelatedComponents(
-    containerEl: HTMLElement,
-    vulnerability: Vulnerability,
-    componentsByVulnerability: ReadonlyMap<string, RelatedComponentSummary[]>
-  ): void {
-    const vulnerabilityRef = `${vulnerability.source.trim().toLowerCase()}::${vulnerability.id.trim().toLowerCase()}`;
-    const relatedComponents = componentsByVulnerability.get(vulnerabilityRef) ?? [];
-
-    const section = containerEl.createDiv({ cls: 'vulndash-related-components-section' });
-    section.createEl('strong', { text: 'Related Components:' });
-
-    if (relatedComponents.length === 0) {
-      section.createEl('p', {
-        cls: 'vulndash-muted-copy',
-        text: 'No deterministic SBOM component matches were found for this vulnerability.'
-      });
-      return;
-    }
-
-    const list = section.createDiv({ cls: 'vulndash-component-chip-list' });
-    for (const component of relatedComponents) {
-      const label = component.version ? `${component.name} ${component.version}` : component.name;
-      list.createSpan({
-        cls: 'vulndash-badge vulndash-badge-neutral',
-        text: `${label} (${component.evidence})`
-      });
-    }
-  }
-
-  private getVulnerabilityKey(vulnerability: Vulnerability): string {
-    return buildVulnerabilityCacheKey(vulnerability);
-  }
-
   private getSorted(): Vulnerability[] {
-    const sorted = [...this.vulnerabilities].sort((left, right) => {
+    return [...this.vulnerabilities].sort((left, right) => {
       const comparison = this.compareVulnerabilities(left, right, this.sortKey);
       if (comparison !== 0) {
         return this.sortDesc ? -comparison : comparison;
@@ -439,8 +328,67 @@ export class VulnDashView extends ItemView {
 
       return 0;
     });
+  }
 
-    return sorted;
+  private getVisibleColumns(): VulnerabilityRowColumn[] {
+    const columns: VulnerabilityRowColumn[] = [
+      { key: 'id', label: 'ID' },
+      { key: 'title', label: 'Title' },
+      { key: 'source', label: 'Source' },
+      { key: 'severity', label: 'Severity' },
+      { key: 'cvssScore', label: 'CVSS' },
+      { key: 'publishedAt', label: 'Published' }
+    ];
+
+    return columns.filter((column) => this.columnVisibility[column.key]);
+  }
+
+  private getVulnerabilityKey(vulnerability: Vulnerability): string {
+    return buildVulnerabilityCacheKey(vulnerability);
+  }
+
+  private async loadComponentWorkspaceSnapshot(
+    loader: () => Promise<ComponentInventoryWorkspaceSnapshot>
+  ): Promise<ComponentInventoryWorkspaceSnapshot> {
+    if (!this.componentWorkspaceDirty && this.componentWorkspaceSnapshot) {
+      return this.componentWorkspaceSnapshot;
+    }
+
+    const snapshot = await loader();
+    this.componentWorkspaceSnapshot = snapshot;
+    this.componentWorkspaceDirty = false;
+    return snapshot;
+  }
+
+  private mountVulnerabilityToolbar(): void {
+    if (!this.vulnerabilityToolbarEl || this.searchInputEl) {
+      return;
+    }
+
+    const filterBar = this.vulnerabilityToolbarEl.createDiv({ cls: 'vulndash-vulnerability-toolbar vulndash-card-shell' });
+    const searchField = filterBar.createDiv({ cls: 'vulndash-vulnerability-search' });
+    searchField.createEl('label', { text: 'Search vulnerabilities' });
+    this.searchInputEl = searchField.createEl('input', {
+      attr: {
+        placeholder: 'Filter by title, ID, or source',
+        type: 'search'
+      },
+      cls: 'vulndash-search-bar'
+    });
+    this.searchInputEl.value = this.localSearchQuery;
+    this.searchInputEl.addEventListener('input', (event) => {
+      this.localSearchQuery = (event.target as HTMLInputElement).value.toLowerCase();
+      if (this.filterDebounceHandle !== null) {
+        window.clearTimeout(this.filterDebounceHandle);
+      }
+      this.filterDebounceHandle = window.setTimeout(() => {
+        this.filterDebounceHandle = null;
+        void this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
+          forcePatchAll: false,
+          reloadRelationships: false
+        });
+      }, 250);
+    });
   }
 
   private compareVulnerabilities(left: Vulnerability, right: Vulnerability, sortKey: SortKey): number {
@@ -467,6 +415,81 @@ export class VulnDashView extends ItemView {
     }
 
     return compareStrings(this.getVulnerabilityKey(left), this.getVulnerabilityKey(right));
+  }
+
+  private async refreshVulnerabilityTable(
+    changedIds: ChangedVulnerabilityIds = EMPTY_CHANGE_HINTS,
+    options: {
+      forcePatchAll: boolean;
+      reloadRelationships: boolean;
+    }
+  ): Promise<void> {
+    if (!this.vulnerabilityResultsEl) {
+      return;
+    }
+
+    const activeToken = ++this.vulnerabilityRenderToken;
+    const shouldLoadRelationships = options.reloadRelationships
+      || (!this.componentWorkspaceSnapshot && this.componentWorkspaceDirty)
+      || (this.relatedComponentsByVulnerability.size === 0 && this.vulnerabilities.length > 0);
+
+    if (shouldLoadRelationships) {
+      const componentWorkspaceSnapshot = await this.loadComponentWorkspaceSnapshot(this.loadComponentInventory);
+      if (activeToken !== this.vulnerabilityRenderToken) {
+        return;
+      }
+      this.relatedComponentsByVulnerability = componentWorkspaceSnapshot.relationships.componentsByVulnerability;
+    }
+
+    this.vulnerabilityTable.render(this.buildVulnerabilityTableState(), {
+      changedIds,
+      forcePatchAll: options.forcePatchAll
+    });
+  }
+
+  private async renderActiveTab(): Promise<void> {
+    if (!this.vulnerabilityPanelEl || !this.componentPanelEl) {
+      return;
+    }
+
+    if (this.activeTab === 'vulnerabilities') {
+      this.vulnerabilityPanelEl.style.display = '';
+      this.componentPanelEl.style.display = 'none';
+      await this.componentInventoryView.setActive(false);
+      await this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
+        forcePatchAll: false,
+        reloadRelationships: this.componentWorkspaceDirty || this.componentWorkspaceSnapshot === null
+      });
+      return;
+    }
+
+    this.vulnerabilityPanelEl.style.display = 'none';
+    this.componentPanelEl.style.display = '';
+    await this.componentInventoryView.setActive(true);
+  }
+
+  private async renderSummaryIfNeeded(vulnerability: Vulnerability, container: HTMLDivElement): Promise<void> {
+    if (!container.isConnected) {
+      return;
+    }
+
+    const renderKey = `${this.getVulnerabilityKey(vulnerability)}::${vulnerability.summary}`;
+    if (container.dataset.vulndashSummaryKey === renderKey && container.childElementCount > 0) {
+      return;
+    }
+
+    container.dataset.vulndashSummaryKey = renderKey;
+    container.empty();
+    await MarkdownRenderer.render(this.app, vulnerability.summary, container, '', this);
+    if (container.dataset.vulndashSummaryKey !== renderKey && container.isConnected) {
+      container.empty();
+    }
+  }
+
+  private updateTabButtons(): void {
+    for (const [tab, button] of this.tabButtons) {
+      button.toggleClass('is-active', tab === this.activeTab);
+    }
   }
 }
 
