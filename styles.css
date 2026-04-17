@@ -76,6 +76,43 @@
   justify-content: flex-end;
 }
 
+.vulndash-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%;
+  min-height: 0;
+}
+
+.vulndash-vulnerability-panel,
+.vulndash-component-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.vulndash-vulnerability-panel,
+.vulndash-virtual-table-root {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.vulndash-vulnerability-results,
+.vulndash-virtual-table-root,
+.vulndash-virtual-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.vulndash-virtual-viewport {
+  overflow: auto;
+}
+
+.vulndash-virtual-spacer-row td {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 .vulndash-toolbar-buttons,
 .vulndash-tab-bar {
   display: flex;
@@ -1032,3 +1069,5 @@
     justify-content: flex-start;
   }
 }
+
+
