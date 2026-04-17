@@ -22,6 +22,14 @@ export interface SyncControls {
   debugHttpMetadata: boolean;
 }
 
+export interface CacheStorageSettings {
+  hardCap: number;
+  hydrateMaxItems: number;
+  hydratePageSize: number;
+  pruneBatchSize: number;
+  ttlMs: number;
+}
+
 export type FeedConfigType = 'nvd' | 'github_advisory' | 'github_repo' | 'generic_json';
 
 interface FeedConfigBase {
@@ -126,6 +134,7 @@ export interface VulnDashSettings {
   sbomPath: string;
   syncControls: SyncControls;
   sourceSyncCursor: Record<string, string>;
+  cacheStorage: CacheStorageSettings;
   settingsVersion: number;
   feeds: FeedConfig[];
 }
