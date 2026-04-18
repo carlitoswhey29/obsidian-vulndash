@@ -5,6 +5,10 @@ import { buildPersistedSettingsSnapshot, DEFAULT_SETTINGS, migrateLegacySettings
 test('buildPersistedSettingsSnapshot keeps persisted SBOM settings lean and normalized', () => {
   const snapshot = buildPersistedSettingsSnapshot({
     ...DEFAULT_SETTINGS,
+    dailyRollup: {
+      ...DEFAULT_SETTINGS.dailyRollup,
+      folderPath: 'briefings/daily'
+    },
     manualProductFilters: ['Portal Web'],
     sbomFolders: ['reports', ' reports ', '', 'reports/nested'],
     followedSbomComponentKeys: ['PURL:PKG:NPM/LODASH@4.17.21', 'purl:pkg:npm/lodash@4.17.21'],
@@ -24,6 +28,7 @@ test('buildPersistedSettingsSnapshot keeps persisted SBOM settings lean and norm
   assert.equal(snapshot.settingsVersion, SETTINGS_VERSION);
   assert.equal(snapshot.nvdApiKey, 'encrypted-nvd');
   assert.equal(snapshot.githubToken, 'encrypted-github');
+  assert.equal(snapshot.dailyRollup.folderPath, 'briefings/daily');
   assert.deepEqual(snapshot.sbomFolders, ['reports', 'reports/nested']);
   assert.deepEqual(snapshot.followedSbomComponentKeys, ['purl:pkg:npm/lodash@4.17.21']);
   assert.deepEqual(snapshot.disabledSbomComponentKeys, ['name-version:legacy@1.0.0']);
@@ -46,4 +51,17 @@ test('migrateLegacySettings defaults malformed component preference arrays safel
   assert.deepEqual(migrated.disabledSbomComponentKeys, []);
   assert.deepEqual(migrated.sbomFolders, ['reports']);
   assert.equal(migrated.settingsVersion, SETTINGS_VERSION);
+});
+
+test('migrateLegacySettings maps legacy auto-note settings into the daily rollup configuration', () => {
+  const migrated = migrateLegacySettings({
+    autoHighNoteCreationEnabled: true,
+    autoNoteCreationEnabled: true,
+    autoNoteFolder: 'Ops Briefings',
+    settingsVersion: 7
+  } as never);
+
+  assert.equal(migrated.dailyRollup.folderPath, 'Ops Briefings');
+  assert.equal(migrated.dailyRollup.autoGenerateOnFirstSyncOfDay, true);
+  assert.equal(migrated.dailyRollup.severityThreshold, 'HIGH');
 });
