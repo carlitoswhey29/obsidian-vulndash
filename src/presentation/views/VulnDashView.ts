@@ -63,6 +63,7 @@ export class VulnDashView extends ItemView {
   private filterDebounceHandle: number | null = null;
   private maxResults = 100;
   private newItems = new Set<string>();
+  private readonly onGenerateDailyRollup: () => Promise<void>;
   private readonly onTriageFilterChange: (triageFilter: TriageFilterMode) => Promise<void>;
   private readonly onTriageStateChange: (vulnerability: Vulnerability, state: TriageState) => Promise<void>;
   private readonly openNotePath: (notePath: string) => Promise<void>;
@@ -109,6 +110,7 @@ export class VulnDashView extends ItemView {
       followComponent: (componentKey: string) => Promise<void>;
       getTriageFilter: () => TriageFilterMode;
       loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
+      onGenerateDailyRollup: () => Promise<void>;
       onTriageFilterChange: (triageFilter: TriageFilterMode) => Promise<void>;
       onTriageStateChange: (vulnerability: Vulnerability, state: TriageState) => Promise<void>;
       openNotePath: (notePath: string) => Promise<void>;
@@ -118,6 +120,7 @@ export class VulnDashView extends ItemView {
     super(leaf);
     this.getTriageFilter = callbacks.getTriageFilter;
     this.loadComponentInventory = callbacks.loadComponentInventory;
+    this.onGenerateDailyRollup = callbacks.onGenerateDailyRollup;
     this.onTriageFilterChange = callbacks.onTriageFilterChange;
     this.onTriageStateChange = callbacks.onTriageStateChange;
     this.openNotePath = callbacks.openNotePath;
@@ -302,6 +305,11 @@ export class VulnDashView extends ItemView {
     refreshBtn.addEventListener('click', () => {
       void this.onRefresh();
       this.componentInventoryView.invalidate();
+    });
+
+    const rollupBtn = buttonBar.createEl('button', { text: 'Generate Briefing' });
+    rollupBtn.addEventListener('click', () => {
+      void this.onGenerateDailyRollup();
     });
 
     this.vulnerabilityPanelEl = contentEl.createDiv({ cls: 'vulndash-vulnerability-panel' });
@@ -701,6 +709,7 @@ export class VulnDashView extends ItemView {
     }
   }
 }
+
 
 
 

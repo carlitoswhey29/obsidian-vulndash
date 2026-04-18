@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import type { ColumnVisibility, VulnDashSettings, ImportedSbomConfig } from '../../application/use-cases/types';
+import { TRIAGE_STATES, formatTriageStateLabel } from '../../domain/triage/TriageState';
 import { summarizeSbomWorkspace } from '../../application/use-cases/SbomWorkspaceService';
 import VulnDashPlugin, { DEFAULT_SETTINGS } from '../plugin/VulnDashPlugin';
 import { ProductFiltersModal } from '../modals/ProductFiltersModal';
@@ -366,36 +367,86 @@ export class VulnDashSettingTab extends PluginSettingTab {
         });
       }));
 
-    containerEl.createEl('h3', { text: 'Integration & Export' });
+    containerEl.createEl('h3', { text: 'Daily Threat Briefing' });
 
-    new Setting(containerEl)
-      .setName('Auto-note creation for CRITICAL')
-      .setDesc('Creates notes automatically for new CRITICAL vulnerabilities.')
-      .addToggle((toggle) => toggle.setValue(settings.autoNoteCreationEnabled).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), autoNoteCreationEnabled: value });
-      }));
-
-    new Setting(containerEl)
-      .setName('Auto-note creation for HIGH')
-      .setDesc('Creates notes automatically for new HIGH vulnerabilities.')
-      .addToggle((toggle) => toggle.setValue(settings.autoHighNoteCreationEnabled).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), autoHighNoteCreationEnabled: value });
-      }));
-
-    const autoNoteFolderSetting = new Setting(containerEl)
-      .setName('Auto-note folder');
-    this.bindBlurPersistedText(autoNoteFolderSetting, {
-      initialValue: settings.autoNoteFolder,
+    const dailyRollupFolderSetting = new Setting(containerEl)
+      .setName('Briefing folder');
+    this.bindBlurPersistedText(dailyRollupFolderSetting, {
+      initialValue: settings.dailyRollup.folderPath,
       persist: async (value) => {
         const folder = value.trim();
-        const nextFolder = folder.length > 0 ? folder : DEFAULT_SETTINGS.autoNoteFolder;
+        const nextFolder = folder.length > 0 ? folder : DEFAULT_SETTINGS.dailyRollup.folderPath;
         await this.plugin.updateSettings({
           ...this.plugin.getSettings(),
-          autoNoteFolder: nextFolder
+          dailyRollup: {
+            ...this.plugin.getSettings().dailyRollup,
+            folderPath: nextFolder
+          }
         });
         return nextFolder;
       }
     });
+
+    new Setting(containerEl)
+      .setName('Severity threshold')
+      .setDesc('Only findings at or above this severity are included in the daily briefing.')
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOptions({ LOW: 'LOW', MEDIUM: 'MEDIUM', HIGH: 'HIGH', CRITICAL: 'CRITICAL' })
+          .setValue(settings.dailyRollup.severityThreshold)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({
+              ...this.plugin.getSettings(),
+              dailyRollup: {
+                ...this.plugin.getSettings().dailyRollup,
+                severityThreshold: value as VulnDashSettings['dailyRollup']['severityThreshold']
+              }
+            });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('Include unmapped findings')
+      .setDesc('Keeps findings without a mapped project note in the dedicated Unmapped Findings section.')
+      .addToggle((toggle) => toggle.setValue(settings.dailyRollup.includeUnmappedFindings).onChange(async (value) => {
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          dailyRollup: {
+            ...this.plugin.getSettings().dailyRollup,
+            includeUnmappedFindings: value
+          }
+        });
+      }));
+
+    new Setting(containerEl)
+      .setName('Auto-generate on first sync of day')
+      .setDesc('Writes or refreshes the daily briefing automatically after the first successful sync for the current day.')
+      .addToggle((toggle) => toggle.setValue(settings.dailyRollup.autoGenerateOnFirstSyncOfDay).onChange(async (value) => {
+        await this.plugin.updateSettings({
+          ...this.plugin.getSettings(),
+          dailyRollup: {
+            ...this.plugin.getSettings().dailyRollup,
+            autoGenerateOnFirstSyncOfDay: value
+          }
+        });
+      }));
+
+    for (const triageState of TRIAGE_STATES) {
+      new Setting(containerEl)
+        .setName(`Exclude triage state: ${formatTriageStateLabel(triageState)}`)
+        .addToggle((toggle) => toggle.setValue(settings.dailyRollup.excludedTriageStates.includes(triageState)).onChange(async (value) => {
+          const excludedTriageStates = value
+            ? Array.from(new Set([...this.plugin.getSettings().dailyRollup.excludedTriageStates, triageState]))
+            : this.plugin.getSettings().dailyRollup.excludedTriageStates.filter((state) => state !== triageState);
+          await this.plugin.updateSettings({
+            ...this.plugin.getSettings(),
+            dailyRollup: {
+              ...this.plugin.getSettings().dailyRollup,
+              excludedTriageStates
+            }
+          });
+        }));
+    }
 
     const nvdKeySetting = new Setting(containerEl)
       .setName('NVD API key')
@@ -732,6 +783,9 @@ export class VulnDashSettingTab extends PluginSettingTab {
     ].join(' • ');
   }
 }
+
+
+
 
 
 
