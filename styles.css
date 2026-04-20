@@ -50,18 +50,19 @@
 .vulndash-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 1rem;
   margin-bottom: 1rem;
 }
 
 .vulndash-header-stacked {
   align-items: flex-start;
-  gap: 1rem;
 }
 
 .vulndash-header-title-block {
   display: grid;
   gap: 0.35rem;
+  min-width: 0;
 }
 
 .vulndash-header-title-block h2 {
@@ -70,10 +71,37 @@
 
 .vulndash-controls {
   display: flex;
-  gap: 10px;
+  flex-direction: column;   /* stack tabs row above actions row */
+  gap: 0.5rem;
+  align-items: flex-end;    /* keep both rows right-justified */
+  flex: 0 0 auto;
+}
+
+.vulndash-tab-bar,
+.vulndash-toolbar-buttons {
+  display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  gap: 0.5rem;
+}
+
+.vulndash-tab-bar {
   justify-content: flex-end;
+}
+
+.vulndash-toolbar-buttons {
+  justify-content: flex-end;
+}
+
+.vulndash-tab-button,
+.vulndash-toolbar-buttons button {
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+.vulndash-tab-button.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
 
 .vulndash-view {
@@ -113,22 +141,11 @@
   border: 0;
   background: transparent;
 }
-.vulndash-toolbar-buttons,
-.vulndash-tab-bar {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
 
-.vulndash-tab-button {
-  border-radius: 999px;
-}
 
-.vulndash-tab-button.is-active {
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
-  color: var(--text-on-accent);
-}
+
+
+
 
 .vulndash-search-bar {
   padding: 4px 8px;
@@ -241,15 +258,23 @@
 .vulndash-table td:nth-child(6) { width: 15%; } /* Published */
 
 
-/* Mobile Responsiveness */
 @media (max-width: 900px) {
   .vulndash-view {
     padding: var(--size-4-2);
   }
 
-  .vulndash-controls {
+  .vulndash-header {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .vulndash-controls {
+    align-items: stretch;
+  }
+
+  .vulndash-tab-bar,
+  .vulndash-toolbar-buttons {
+    justify-content: flex-start;
   }
 
   .vulndash-controls select,

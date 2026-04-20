@@ -288,10 +288,12 @@ export class VulnDashView extends ItemView {
     });
 
     const controls = header.createDiv({ cls: 'vulndash-controls' });
+    /* Moved the tab buttons and the action buttons into a new container to allow for better layout control */
     const tabs = controls.createDiv({ cls: 'vulndash-tab-bar' });
     this.createTabButton(tabs, 'vulnerabilities', 'Vulnerabilities');
     this.createTabButton(tabs, 'components', 'Components');
 
+    /* The action buttons are now in their own container with flex layout to keep them grouped together and right-aligned */
     const buttonBar = controls.createDiv({ cls: 'vulndash-toolbar-buttons' });
     const pollingBtn = buttonBar.createEl('button', {
       text: this.isPollingEnabled() ? 'Stop polling' : 'Start polling'
