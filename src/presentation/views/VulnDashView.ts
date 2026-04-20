@@ -693,20 +693,37 @@ export class VulnDashView extends ItemView {
   }
 
   private async renderSummaryIfNeeded(vulnerability: Vulnerability, container: HTMLDivElement): Promise<void> {
-    if (!container.isConnected) {
-      return;
-    }
+    const summary = typeof vulnerability.summary === 'string' ? vulnerability.summary.trim() : '';
+    const renderKey = `${this.getVulnerabilityKey(vulnerability)}::${summary}`;
 
-    const renderKey = `${this.getVulnerabilityKey(vulnerability)}::${vulnerability.summary}`;
-    if (container.dataset.vulndashSummaryKey === renderKey && container.childElementCount > 0) {
+    const existingSummaryHost = container.querySelector<HTMLElement>(':scope > .vulndash-vulnerability-summary-markdown');
+
+    if (container.dataset.vulndashSummaryKey === renderKey && existingSummaryHost !== null) {
       return;
     }
 
     container.dataset.vulndashSummaryKey = renderKey;
-    container.empty();
-    await MarkdownRenderer.render(this.app, vulnerability.summary, container, '', this);
+
+    if (existingSummaryHost !== null) {
+      existingSummaryHost.remove();
+    }
+
+    const summaryHost = container.createDiv({
+      cls: 'vulndash-vulnerability-summary-markdown markdown-rendered'
+    });
+
+    if (!summary) {
+      summaryHost.createEl('p', {
+        cls: 'vulndash-muted-copy',
+        text: 'No vulnerability summary is available.'
+      });
+      return;
+    }
+
+    await MarkdownRenderer.render(this.app, summary, summaryHost, '', this);
+
     if (container.dataset.vulndashSummaryKey !== renderKey && container.isConnected) {
-      container.empty();
+      summaryHost.remove();
     }
   }
 

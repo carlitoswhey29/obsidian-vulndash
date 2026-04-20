@@ -205,6 +205,19 @@
   width: 1.2em;
 }
 
+.vulndash-summary,
+.vulndash-vulnerability-summary-markdown {
+  line-height: 1.55;
+  user-select: text;
+}
+
+.vulndash-vulnerability-summary-markdown p,
+.vulndash-vulnerability-summary-markdown ul,
+.vulndash-vulnerability-summary-markdown ol {
+  margin-top: 0.35rem;
+  margin-bottom: 0.65rem;
+}
+
 /* --- MARKDOWN CODE BLOCK FIXES --- */
 .vulndash-summary pre {
   background-color: var(--background-secondary-alt);

@@ -558,27 +558,45 @@ export class VirtualizedVulnTable {
       return;
     }
 
+    let detailsCreated = false;
+
     if (!mountedRow.detailsRow) {
+      detailsCreated = true;
+
       const documentRef = mountedRow.mainRow.ownerDocument;
       mountedRow.detailsRow = documentRef.createElement('tr');
       mountedRow.detailsRow.className = 'vulndash-row-details';
+
       mountedRow.detailsCell = documentRef.createElement('td');
       mountedRow.detailsRow.append(mountedRow.detailsCell);
+
       mountedRow.detailsHeadingEl = documentRef.createElement('h3');
       mountedRow.detailsHeadingEl.className = 'vulndash-details-title';
       mountedRow.detailsCell.append(mountedRow.detailsHeadingEl);
+
       mountedRow.summaryEl = documentRef.createElement('div');
       mountedRow.summaryEl.className = 'vulndash-summary markdown-preview-view';
       mountedRow.detailsCell.append(mountedRow.summaryEl);
+
       mountedRow.referenceSectionEl = documentRef.createElement('div');
       mountedRow.detailsCell.append(mountedRow.referenceSectionEl);
+
       mountedRow.relatedComponentsSectionEl = documentRef.createElement('div');
       mountedRow.detailsCell.append(mountedRow.relatedComponentsSectionEl);
+
       mountedRow.affectedProjectsSectionEl = documentRef.createElement('div');
       mountedRow.detailsCell.append(mountedRow.affectedProjectsSectionEl);
     }
 
-    if (!mountedRow.detailsRow || !mountedRow.detailsCell || !mountedRow.detailsHeadingEl || !mountedRow.summaryEl || !mountedRow.referenceSectionEl || !mountedRow.relatedComponentsSectionEl || !mountedRow.affectedProjectsSectionEl) {
+    if (
+      !mountedRow.detailsRow
+      || !mountedRow.detailsCell
+      || !mountedRow.detailsHeadingEl
+      || !mountedRow.summaryEl
+      || !mountedRow.referenceSectionEl
+      || !mountedRow.relatedComponentsSectionEl
+      || !mountedRow.affectedProjectsSectionEl
+    ) {
       return;
     }
 
@@ -586,12 +604,22 @@ export class VirtualizedVulnTable {
     setTextIfChanged(mountedRow.detailsHeadingEl, viewModel.titleText);
 
     const previousViewModel = mountedRow.viewModel;
-    if (forceRefreshDetails || previousViewModel.summaryMarkdown !== viewModel.summaryMarkdown) {
+
+    if (
+      forceRefreshDetails
+      || detailsCreated
+      || mountedRow.summaryEl.childElementCount === 0
+      || previousViewModel.summaryMarkdown !== viewModel.summaryMarkdown
+    ) {
       mountedRow.summaryEl.empty();
       void this.callbacks.renderSummary(vulnerability, mountedRow.summaryEl);
     }
 
-    if (forceRefreshDetails || previousViewModel.referenceUrls.length !== viewModel.referenceUrls.length || previousViewModel.referenceUrls.some((reference, index) => reference !== viewModel.referenceUrls[index])) {
+    if (
+      forceRefreshDetails
+      || previousViewModel.referenceUrls.length !== viewModel.referenceUrls.length
+      || previousViewModel.referenceUrls.some((reference, index) => reference !== viewModel.referenceUrls[index])
+    ) {
       this.renderReferenceSection(mountedRow.referenceSectionEl, viewModel.referenceUrls);
     }
 
@@ -599,7 +627,12 @@ export class VirtualizedVulnTable {
       this.renderRelatedComponentsSection(mountedRow.relatedComponentsSectionEl, viewModel);
     }
 
-    if (forceRefreshDetails || !areAffectedProjectsEqual(previousViewModel.affectedProjects, viewModel.affectedProjects) || previousViewModel.unmappedSbomLabels.length !== viewModel.unmappedSbomLabels.length || previousViewModel.unmappedSbomLabels.some((label, index) => label !== viewModel.unmappedSbomLabels[index])) {
+    if (
+      forceRefreshDetails
+      || !areAffectedProjectsEqual(previousViewModel.affectedProjects, viewModel.affectedProjects)
+      || previousViewModel.unmappedSbomLabels.length !== viewModel.unmappedSbomLabels.length
+      || previousViewModel.unmappedSbomLabels.some((label, index) => label !== viewModel.unmappedSbomLabels[index])
+    ) {
       this.renderAffectedProjectsSection(mountedRow.affectedProjectsSectionEl, viewModel);
     }
   }
