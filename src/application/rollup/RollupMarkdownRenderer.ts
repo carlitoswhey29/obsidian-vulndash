@@ -16,12 +16,23 @@ export interface RenderedDailyRollup {
 }
 
 interface ProjectFindingGroup {
-  readonly findings: RollupFinding[];
+  readonly findings: readonly RollupFinding[];
   readonly project: ResolvedAffectedProject;
 }
 
-const asSentence = (value: string): string =>
-  value.endsWith('.') ? value : `${value}.`;
+interface MutableProjectFindingGroup {
+  findings: RollupFinding[];
+  project: ResolvedAffectedProject;
+}
+
+const asSentence = (value: string): string => {
+  const normalized = value.trim();
+  if (!normalized) {
+    return '';
+  }
+
+  return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+};
 
 const truncateInline = (value: string, maxLength = 180): string => {
   const normalized = value.replace(/\s+/g, ' ').trim();
@@ -29,11 +40,24 @@ const truncateInline = (value: string, maxLength = 180): string => {
     return normalized;
   }
 
-  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+};
+
+const safeInline = (value: string | null | undefined, fallback = 'Not provided'): string => {
+  const normalized = value?.replace(/\s+/g, ' ').trim();
+  return normalized && normalized.length > 0 ? normalized : fallback;
+};
+
+const formatCvss = (score: number | null | undefined): string => {
+  if (typeof score !== 'number' || !Number.isFinite(score)) {
+    return 'N/A';
+  }
+
+  return score.toFixed(1);
 };
 
 const formatFindingDescriptor = (finding: RollupFinding): string =>
-  `\`${finding.vulnerability.id}\` ${finding.vulnerability.severity} · ${formatTriageStateLabel(finding.triageState)} · CVSS ${finding.vulnerability.cvssScore.toFixed(1)}`;
+  `**\`${finding.vulnerability.id}\`** | ${safeInline(finding.vulnerability.severity, 'Unknown')} | ${formatTriageStateLabel(finding.triageState)} | CVSS ${formatCvss(finding.vulnerability.cvssScore)}`;
 
 export class RollupMarkdownRenderer {
   public constructor(
@@ -44,8 +68,9 @@ export class RollupMarkdownRenderer {
     readonly date: string;
     readonly findings: readonly RollupFinding[];
   }): RenderedDailyRollup {
-    const projectGroups = this.groupByProject(input.findings);
-    const unmappedFindings = input.findings.filter((finding) => finding.unmappedSboms.length > 0);
+    const sortedFindings = this.sortFindings(input.findings);
+    const projectGroups = this.groupByProject(sortedFindings);
+    const unmappedFindings = sortedFindings.filter((finding) => finding.unmappedSboms.length > 0);
 
     return {
       analystNotesHeading: '## Analyst Notes',
@@ -53,7 +78,7 @@ export class RollupMarkdownRenderer {
       managedSections: [
         {
           key: 'executive-summary',
-          content: this.renderExecutiveSummary(input.date, input.findings, projectGroups, unmappedFindings)
+          content: this.renderExecutiveSummary(input.date, sortedFindings, projectGroups, unmappedFindings)
         },
         {
           key: 'affected-projects',
@@ -72,14 +97,49 @@ export class RollupMarkdownRenderer {
     };
   }
 
+  private sortFindings(findings: readonly RollupFinding[]): RollupFinding[] {
+    const severityWeight: Record<string, number> = {
+      'CRITICAL': 5,
+      'HIGH': 4,
+      'MEDIUM': 3,
+      'LOW': 2,
+      'INFORMATIONAL': 1,
+      'UNKNOWN': 0
+    };
+
+    return [...findings].sort((left, right) => {
+      const leftSev = safeInline(left.vulnerability.severity, 'UNKNOWN').toUpperCase();
+      const rightSev = safeInline(right.vulnerability.severity, 'UNKNOWN').toUpperCase();
+
+      // 1. Sort by Severity Weight (Descending)
+      const weightDiff = (severityWeight[rightSev] ?? 0) - (severityWeight[leftSev] ?? 0);
+      if (weightDiff !== 0) {
+        return weightDiff;
+      }
+
+      // 2. Sort by CVSS Score (Descending)
+      const rightCvss = right.vulnerability.cvssScore ?? -1;
+      const leftCvss = left.vulnerability.cvssScore ?? -1;
+      if (rightCvss !== leftCvss) {
+        return rightCvss - leftCvss;
+      }
+
+      // 3. Fallback to ID (Ascending)
+      return left.vulnerability.id.localeCompare(right.vulnerability.id);
+    });
+  }
+
   private groupByProject(findings: readonly RollupFinding[]): ProjectFindingGroup[] {
-    const groups = new Map<string, ProjectFindingGroup>();
+    const groups = new Map<string, MutableProjectFindingGroup>();
 
     for (const finding of findings) {
       for (const project of finding.affectedProjects) {
         const existing = groups.get(project.notePath);
+
         if (existing) {
-          existing.findings.push(finding);
+          if (!existing.findings.some((entry) => entry.vulnerability.id === finding.vulnerability.id)) {
+            existing.findings.push(finding);
+          }
           continue;
         }
 
@@ -92,8 +152,8 @@ export class RollupMarkdownRenderer {
 
     return Array.from(groups.values())
       .map((group) => ({
-        ...group,
-        findings: [...group.findings]
+        project: group.project,
+        findings: this.sortFindings(group.findings)
       }))
       .sort((left, right) =>
         left.project.displayName.localeCompare(right.project.displayName)
@@ -110,34 +170,43 @@ export class RollupMarkdownRenderer {
       return [
         '## Executive Summary',
         '',
-        `- No findings matched the daily briefing policy for ${date}.`,
-        '- Existing analyst notes remain below for continuity.'
+        '> [!success] All Clear',
+        `> No findings matched the daily briefing policy for ${date}.`,
+        '> ',
+        '> Existing analyst notes remain below for continuity.'
       ].join('\n');
     }
 
     const uniqueProjects = projectGroups.map((group) =>
       this.wikiLinkFormatter.format(group.project.notePath, group.project.displayName));
+
     const severityCounts = new Map<string, number>();
     for (const finding of findings) {
-      severityCounts.set(finding.vulnerability.severity, (severityCounts.get(finding.vulnerability.severity) ?? 0) + 1);
+      const severity = safeInline(finding.vulnerability.severity, 'Unknown');
+      severityCounts.set(severity, (severityCounts.get(severity) ?? 0) + 1);
     }
 
+    const severityWeight: Record<string, number> = {
+      'CRITICAL': 5, 'HIGH': 4, 'MEDIUM': 3, 'LOW': 2, 'INFORMATIONAL': 1, 'UNKNOWN': 0
+    };
+
     const severitySummary = Array.from(severityCounts.entries())
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-      .map(([severity, count]) => `${count} ${severity}`)
+      .sort((left, right) => (severityWeight[right[0].toUpperCase()] ?? 0) - (severityWeight[left[0].toUpperCase()] ?? 0))
+      .map(([severity, count]) => `**${count}** ${severity}`)
       .join(', ');
 
     return [
       '## Executive Summary',
       '',
-      `- ${findings.length} actionable finding${findings.length === 1 ? '' : 's'} matched the daily briefing policy for ${date}.`,
+      '> [!summary] Threat Intelligence Snapshot',
+      `> - **Total Findings:** ${findings.length} actionable finding${findings.length === 1 ? '' : 's'} matched the policy.`,
+      `> - **Severity Mix:** ${severitySummary}.`,
       uniqueProjects.length > 0
-        ? `- ${uniqueProjects.length} mapped project${uniqueProjects.length === 1 ? '' : 's'} require review: ${uniqueProjects.join(', ')}.`
-        : '- No mapped project notes were resolved for the selected findings.',
-      `- Severity mix: ${severitySummary}.`,
+        ? `> - **Impacted Projects:** ${uniqueProjects.length} mapped project${uniqueProjects.length === 1 ? '' : 's'} require review.`
+        : '> - **Impacted Projects:** No mapped project notes were resolved.',
       unmappedFindings.length > 0
-        ? `- ${unmappedFindings.length} finding${unmappedFindings.length === 1 ? '' : 's'} still need project mapping triage.`
-        : '- No unmapped findings are pending project-note correlation.'
+        ? `> - **Pending Triage:** ${unmappedFindings.length} finding${unmappedFindings.length === 1 ? '' : 's'} need project mapping.`
+        : '> - **Pending Triage:** None.'
     ].join('\n');
   }
 
@@ -146,26 +215,36 @@ export class RollupMarkdownRenderer {
       return [
         '## Affected Projects',
         '',
-        '- No mapped project findings matched the current rollup policy.'
+        '- *No mapped project findings matched the current rollup policy.*'
       ].join('\n');
     }
 
-    const lines = ['## Affected Projects', ''];
+    const lines: string[] = ['## Affected Projects', ''];
+
     for (const group of projectGroups) {
       lines.push(`### ${this.wikiLinkFormatter.format(group.project.notePath, group.project.displayName)}`);
       lines.push('');
 
       for (const finding of group.findings) {
         lines.push(`- ${formatFindingDescriptor(finding)}`);
-        lines.push(`- Title: ${finding.vulnerability.title}`);
-        lines.push(`- Summary: ${asSentence(truncateInline(finding.vulnerability.summary))}`);
-        lines.push(`- Source SBOMs: ${group.project.sourceSbomLabels.join(', ') || 'None linked'}`);
-        if (finding.triageRecord?.ticketRef) {
-          lines.push(`- Ticket: ${finding.triageRecord.ticketRef}`);
+        lines.push(`  - **Title:** ${safeInline(finding.vulnerability.title)}`);
+
+        const summary = asSentence(truncateInline(safeInline(finding.vulnerability.summary, 'No summary provided')));
+        lines.push(`  - **Summary:** ${summary}`);
+
+        const sourceSboms = group.project.sourceSbomLabels.length > 0
+          ? group.project.sourceSbomLabels.join(', ')
+          : 'None linked';
+        lines.push(`  - **Source SBOMs:** ${sourceSboms}`);
+
+        if (finding.triageRecord?.ticketRef?.trim()) {
+          lines.push(`  - **Ticket:** ${finding.triageRecord.ticketRef.trim()}`);
         }
-        if (finding.triageRecord?.reason) {
-          lines.push(`- Analyst context: ${asSentence(truncateInline(finding.triageRecord.reason, 140))}`);
+
+        if (finding.triageRecord?.reason?.trim()) {
+          lines.push(`  - **Analyst Context:** ${asSentence(truncateInline(finding.triageRecord.reason, 140))}`);
         }
+
         lines.push('');
       }
     }
@@ -177,22 +256,27 @@ export class RollupMarkdownRenderer {
     projectGroups: readonly ProjectFindingGroup[],
     unmappedFindings: readonly RollupFinding[]
   ): string {
-    const tasks = ['## Action Items', ''];
+    const tasks: string[] = ['## Action Items', '', '> [!todo] Required Reviews'];
 
     for (const group of projectGroups) {
       const projectLink = this.wikiLinkFormatter.format(group.project.notePath, group.project.displayName);
+
       for (const finding of group.findings) {
-        tasks.push(`- [ ] ${projectLink} assess ${finding.vulnerability.id} (${finding.vulnerability.severity}, ${formatTriageStateLabel(finding.triageState)}).`);
+        tasks.push(
+          `> - [ ] Assess **${finding.vulnerability.id}** (${safeInline(finding.vulnerability.severity, 'Unknown')}, ${formatTriageStateLabel(finding.triageState)}) for ${projectLink}`
+        );
       }
     }
 
     for (const finding of unmappedFindings) {
       const unmappedLabels = finding.unmappedSboms.map((sbom) => sbom.sbomLabel).join(', ');
-      tasks.push(`- [ ] Map ${finding.vulnerability.id} to an internal project note for: ${unmappedLabels}.`);
+      tasks.push(
+        `> - [ ] Map **${finding.vulnerability.id}** to an internal project note (Source: *${unmappedLabels || 'Unknown SBOM'}*)`
+      );
     }
 
-    if (tasks.length === 2) {
-      tasks.push('- No action items were generated from the current policy output.');
+    if (tasks.length === 3) {
+      tasks.push('> - [x] No action items required today.');
     }
 
     return tasks.join('\n');
@@ -203,16 +287,19 @@ export class RollupMarkdownRenderer {
       return [
         '## Unmapped Findings',
         '',
-        '- No unmapped findings matched the current rollup policy.'
+        '- *No unmapped findings matched the current rollup policy.*'
       ].join('\n');
     }
 
-    const lines = ['## Unmapped Findings', ''];
+    const lines: string[] = ['## Unmapped Findings', ''];
+
     for (const finding of findings) {
       const labels = finding.unmappedSboms.map((sbom) => sbom.sbomLabel).join(', ');
-      lines.push(`- ${formatFindingDescriptor(finding)} · Unmapped SBOMs: ${labels}`);
-      lines.push(`- Title: ${finding.vulnerability.title}`);
-      lines.push(`- Summary: ${asSentence(truncateInline(finding.vulnerability.summary))}`);
+
+      lines.push(`- ${formatFindingDescriptor(finding)}`);
+      lines.push(`  - **Title:** ${safeInline(finding.vulnerability.title)}`);
+      lines.push(`  - **Summary:** ${asSentence(truncateInline(safeInline(finding.vulnerability.summary, 'No summary provided')))}`);
+      lines.push(`  - **Unmapped SBOMs:** ${labels || 'Unknown SBOM'}`);
       lines.push('');
     }
 
