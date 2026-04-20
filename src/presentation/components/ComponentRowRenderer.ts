@@ -1,7 +1,8 @@
 import type { RelatedVulnerabilitySummary, TrackedComponent } from '../../application/sbom/types';
-import { renderComponentDetailPanel, type ComponentDetailPanelCallbacks } from './ComponentDetailPanel';
+import type { ComponentDetailPanelCallbacks, ComponentDetailsRenderer } from './ComponentDetailPanel';
 
 export interface ComponentRowRendererCallbacks extends ComponentDetailPanelCallbacks {
+  detailsRenderer: ComponentDetailsRenderer;
   effectiveHighestSeverity?: string;
   effectiveVulnerabilityCount: number;
   onDisable: (component: TrackedComponent) => void;
@@ -97,7 +98,7 @@ export const renderComponentRow = (
   const vulnerabilityStack = vulnerabilityCell.createDiv({ cls: 'vulndash-component-vuln-stack' });
   vulnerabilityStack.createSpan({ text: String(effectiveVulnerabilityCount) });
   vulnerabilityStack.createSpan({
-    cls: `vulndash-severity-pill is-${effectiveHighestSeverity ?? 'none'}`,
+    cls: `vulndash-severity-pill is-${effectiveHighestSeverity?.toLowerCase() ?? 'none'}`,
     text: formatSeverity(effectiveHighestSeverity)
   });
 
@@ -157,6 +158,10 @@ export const renderComponentRow = (
       colspan: '6'
     }
   });
+
+  // --- Update: Host element for the Markdown Renderer ---
+  const detailsHost = detailsCell.createDiv({ cls: 'vulndash-component-details-host' });
+
   const detailCallbacks: ComponentDetailPanelCallbacks = {};
   if (callbacks.onOpenNote) {
     detailCallbacks.onOpenNote = callbacks.onOpenNote;
@@ -168,5 +173,8 @@ export const renderComponentRow = (
     detailCallbacks.effectiveHighestSeverity = effectiveHighestSeverity;
   }
 
-  renderComponentDetailPanel(detailsCell, component, detailCallbacks);
+  // --- Update: Asynchronously render the markdown content into the detailsHost ---
+  if (expanded) {
+    void callbacks.detailsRenderer.renderDetails(detailsHost, component, detailCallbacks);
+  }
 };

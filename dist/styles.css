@@ -142,11 +142,6 @@
   background: transparent;
 }
 
-
-
-
-
-
 .vulndash-search-bar {
   padding: 4px 8px;
   background-color: var(--background-primary);
@@ -1157,4 +1152,46 @@
   background: rgba(89, 97, 112, 0.15);
   border-color: rgba(89, 97, 112, 0.3);
   color: #4d5563;
+}
+
+/* --- Added .vulndash-component-details changes --- */
+
+.vulndash-component-details,
+.vulndash-component-details-host {
+  padding: 0.75rem 1rem;
+  line-height: 1.55;
+  user-select: text;
+}
+
+.vulndash-component-details h2,
+.vulndash-component-details h3,
+.vulndash-component-details h4 {
+  margin-top: 1rem;
+  margin-bottom: 0.4rem;
+}
+
+.vulndash-component-details p,
+.vulndash-component-details ul,
+.vulndash-component-details ol {
+  margin-top: 0.35rem;
+  margin-bottom: 0.65rem;
+}
+
+.vulndash-component-details hr {
+  margin: 1rem 0;
+  border: 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.vulndash-component-details code {
+  white-space: break-spaces;
+}
+
+.vulndash-component-details .callout {
+  margin: 0.75rem 0 1rem 0;
+}
+
+.vulndash-component-details a.external-link,
+.vulndash-component-details a.internal-link {
+  word-break: break-word;
 }

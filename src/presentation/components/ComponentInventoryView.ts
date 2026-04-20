@@ -6,8 +6,10 @@ import {
   deriveComponentInventoryState
 } from './ComponentInventoryStore';
 import { renderComponentRow, type ComponentRowRendererCallbacks } from './ComponentRowRenderer';
+import type { ComponentDetailsRenderer } from './ComponentDetailPanel';
 
 export interface ComponentInventoryViewCallbacks {
+  detailsRenderer: ComponentDetailsRenderer;
   loadSnapshot: () => Promise<ComponentInventoryWorkspaceSnapshot>;
   onDisableComponent: (componentKey: string) => Promise<void>;
   onEnableComponent: (componentKey: string) => Promise<void>;
@@ -342,6 +344,7 @@ export class ComponentInventoryView {
     for (const entry of components) {
       const { component } = entry;
       const rowCallbacks: ComponentRowRendererCallbacks = {
+        detailsRenderer: this.callbacks.detailsRenderer,
         effectiveVulnerabilityCount: entry.vulnerabilityCount,
         onDisable: (trackedComponent) => {
           void this.handlePreferenceAction(trackedComponent.key, 'disable');

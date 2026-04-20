@@ -15,6 +15,7 @@ import { buildTriageCorrelationKeyForVulnerability } from '../../domain/triage/T
 import type { TriageRecord } from '../../domain/triage/TriageRecord';
 import { DEFAULT_TRIAGE_STATE, type TriageState } from '../../domain/triage/TriageState';
 import { severityOrder } from '../../domain/value-objects/Severity';
+import { ComponentDetailsRenderer } from '../components/ComponentDetailPanel';
 import { ComponentInventoryView } from '../components/ComponentInventoryView';
 import { TriageFilterControl } from '../components/TriageFilterControl';
 import {
@@ -55,6 +56,7 @@ export class VulnDashView extends ItemView {
   private affectedProjectsByVulnerabilityRef = new Map<string, AffectedProjectResolution>();
   private componentWorkspaceDirty = true;
   private componentWorkspaceSnapshot: ComponentInventoryWorkspaceSnapshot | null = null;
+  private readonly componentDetailsRenderer: ComponentDetailsRenderer;
   private readonly componentInventoryView: ComponentInventoryView;
   private componentPanelEl: HTMLDivElement | null = null;
   private readonly getTriageFilter: () => TriageFilterMode;
@@ -118,6 +120,8 @@ export class VulnDashView extends ItemView {
     }
   ) {
     super(leaf);
+    this.componentDetailsRenderer = new ComponentDetailsRenderer(this.app, '');
+    this.addChild(this.componentDetailsRenderer);
     this.getTriageFilter = callbacks.getTriageFilter;
     this.loadComponentInventory = callbacks.loadComponentInventory;
     this.onGenerateDailyRollup = callbacks.onGenerateDailyRollup;
@@ -125,6 +129,7 @@ export class VulnDashView extends ItemView {
     this.onTriageStateChange = callbacks.onTriageStateChange;
     this.openNotePath = callbacks.openNotePath;
     this.componentInventoryView = new ComponentInventoryView({
+      detailsRenderer: this.componentDetailsRenderer,
       loadSnapshot: async () => this.loadComponentWorkspaceSnapshot(this.loadComponentInventory),
       onDisableComponent: callbacks.disableComponent,
       onEnableComponent: callbacks.enableComponent,
@@ -711,7 +716,6 @@ export class VulnDashView extends ItemView {
     }
   }
 }
-
 
 
 
