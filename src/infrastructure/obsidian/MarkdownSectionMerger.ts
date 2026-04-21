@@ -23,13 +23,17 @@ export class MarkdownSectionMerger {
     readonly title: string;
   }): string {
     const existingContent = normalizeContent(input.existingContent ?? '');
-    const analystNotesBody = this.extractAnalystNotesBody(existingContent) ?? input.analystNotesPlaceholder;
+    const analystNotesBody =
+      this.extractAnalystNotesBody(existingContent, input.analystNotesHeading)
+      ?? input.analystNotesPlaceholder;
     const sections = input.managedSections.map((section) => this.renderManagedSection(section));
 
     return [
       input.title.trim(),
       '',
-      ...sections.flatMap((section) => [section, '']),
+      ...sections.flatMap((section, index) =>
+        index === sections.length - 1 ? [section] : [section, '']
+      ),
       input.analystNotesHeading.trim(),
       '',
       analystNotesBody.trim() || input.analystNotesPlaceholder
@@ -44,18 +48,23 @@ export class MarkdownSectionMerger {
     ].join('\n');
   }
 
-  private extractAnalystNotesBody(content: string): string | null {
+  private extractAnalystNotesBody(
+    content: string,
+    analystNotesHeading: string
+  ): string | null {
     if (!content) {
       return null;
     }
 
-    const analystHeadingPattern = /^## Analyst Notes\s*$/m;
-    const analystHeadingMatch = analystHeadingPattern.exec(content);
-    if (!analystHeadingMatch || analystHeadingMatch.index === undefined) {
+    const escapedHeading = escapeRegExp(analystNotesHeading.trim());
+    const analystHeadingPattern = new RegExp(`^${escapedHeading}\\s*$`, 'm');
+
+    const match = analystHeadingPattern.exec(content);
+    if (!match || match.index === undefined) {
       return null;
     }
 
-    const bodyStart = analystHeadingMatch.index + analystHeadingMatch[0].length;
+    const bodyStart = match.index + match[0].length;
     return content.slice(bodyStart).trim();
   }
 
@@ -73,7 +82,7 @@ export class MarkdownSectionMerger {
       );
       working = pattern.test(working)
         ? working.replace(pattern, nextBlock)
-        : `${working}\n\n${nextBlock}`.trim();
+        : `${working.trimEnd()}\n\n${nextBlock}`;
     }
 
     return working;

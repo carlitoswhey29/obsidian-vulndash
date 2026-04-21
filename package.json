@@ -1,6 +1,6 @@
 {
   "name": "obsidian-vulndash",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Obsidian vulnerability dashboard plugin",
   "private": true,
   "main": "main.js",
@@ -8,11 +8,13 @@
   "author": "Carlos Aguilar",
   "license": "MIT",
   "scripts": {
+    "sync-version": "node scripts/sync-version.mjs",
+    "version": "node scripts/sync-version.mjs && git add package.json manifest.json",
     "clean": "rimraf dist main.js",
     "dev": "node esbuild.config.mjs",
     "lint": "eslint \"src/**/*.ts\" --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "build": "npm run lint && npm run typecheck && node esbuild.config.mjs production",
+    "build": "npm run lint && npm run typecheck && npm run sync-version && node esbuild.config.mjs production",
     "build:secure": "npm run build && npm run sbom"
   },
   "devDependencies": {
