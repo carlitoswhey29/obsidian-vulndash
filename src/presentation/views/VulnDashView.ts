@@ -2,6 +2,13 @@ import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
 import type { ChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
 import { buildVulnerabilityCacheKey, createEmptyChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
 import { FilterByAffectedProject, type AffectedProjectFilter } from '../../application/correlation/FilterByAffectedProject';
+import {
+  DEFAULT_DASHBOARD_DATE_RANGE,
+  cloneDashboardDateRangeSelection,
+  filterVulnerabilitiesByPublishedDateWindow,
+  resolveDashboardDateRangeSelection,
+  type DashboardDateRangeSelection
+} from '../../application/dashboard/PublishedDateWindow';
 import type { ComponentInventoryWorkspaceSnapshot } from '../../application/sbom/types';
 import type { TriageFilterMode } from '../../application/triage/FilterByTriageState';
 import type { DashboardSortOrder, VulnDashSettings } from '../../application/use-cases/types';
@@ -59,7 +66,15 @@ export class VulnDashView extends ItemView {
   private readonly componentDetailsRenderer: ComponentDetailsRenderer;
   private readonly componentInventoryView: ComponentInventoryView;
   private componentPanelEl: HTMLDivElement | null = null;
+  private customDateFromInputEl: HTMLInputElement | null = null;
+  private customDateToInputEl: HTMLInputElement | null = null;
+  private customDateRangeEl: HTMLDivElement | null = null;
+  private dateRangeSelectEl: HTMLSelectElement | null = null;
+  private dateRangeValidationEl: HTMLDivElement | null = null;
+  private dateRangeSelection = cloneDashboardDateRangeSelection(DEFAULT_DASHBOARD_DATE_RANGE);
+  private appliedDateRangeSelection = cloneDashboardDateRangeSelection(DEFAULT_DASHBOARD_DATE_RANGE);
   private readonly getTriageFilter: () => TriageFilterMode;
+  private readonly getNow: () => Date;
   private readonly loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
   private localSearchQuery = '';
   private filterDebounceHandle: number | null = null;
@@ -111,6 +126,7 @@ export class VulnDashView extends ItemView {
       enableComponent: (componentKey: string) => Promise<void>;
       followComponent: (componentKey: string) => Promise<void>;
       getTriageFilter: () => TriageFilterMode;
+      getNow?: () => Date;
       loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
       onGenerateDailyRollup: () => Promise<void>;
       onTriageFilterChange: (triageFilter: TriageFilterMode) => Promise<void>;
@@ -123,6 +139,7 @@ export class VulnDashView extends ItemView {
     this.componentDetailsRenderer = new ComponentDetailsRenderer(this.app, '');
     this.addChild(this.componentDetailsRenderer);
     this.getTriageFilter = callbacks.getTriageFilter;
+    this.getNow = callbacks.getNow ?? (() => new Date());
     this.loadComponentInventory = callbacks.loadComponentInventory;
     this.onGenerateDailyRollup = callbacks.onGenerateDailyRollup;
     this.onTriageFilterChange = callbacks.onTriageFilterChange;
@@ -342,13 +359,16 @@ export class VulnDashView extends ItemView {
     const columns = this.getVisibleColumns();
 
     if (vulnerabilities.length === 0) {
+      const hasInteractiveFilters = Boolean(this.localSearchQuery)
+        || this.affectedProjectFilterValue !== ALL_AFFECTED_PROJECT_FILTER_VALUE
+        || this.appliedDateRangeSelection.preset !== DEFAULT_DASHBOARD_DATE_RANGE.preset;
       return {
         columns,
         emptyState: {
-          body: this.localSearchQuery
-            ? 'Try broadening the search query or clear the filter.'
+          body: hasInteractiveFilters
+            ? 'Try broadening the search query, adjusting the date range, or clearing filters.'
             : 'Refresh the dashboard after configuring at least one enabled vulnerability source.',
-          title: this.localSearchQuery ? 'No vulnerabilities match the current search' : 'No vulnerabilities available'
+          title: hasInteractiveFilters ? 'No vulnerabilities match the current filters' : 'No vulnerabilities available'
         },
         vulnerabilities
       };
@@ -381,6 +401,10 @@ export class VulnDashView extends ItemView {
 
   private getFilteredVulnerabilities(): Vulnerability[] {
     let data = this.getSorted();
+    const dateRangeResolution = resolveDashboardDateRangeSelection(this.appliedDateRangeSelection, this.getNow());
+    if (dateRangeResolution.window) {
+      data = filterVulnerabilitiesByPublishedDateWindow(data, dateRangeResolution.window);
+    }
     data = this.affectedProjectFilter.execute(
       data,
       this.getSelectedAffectedProjectFilter(),
@@ -568,7 +592,61 @@ export class VulnDashView extends ItemView {
     });
     this.searchInputEl.value = this.localSearchQuery;
 
-    const affectedProjectField = filterBar.createDiv({ cls: 'vulndash-triage-filter' });
+    const controlsRow = filterBar.createDiv({ cls: 'vulndash-vulnerability-toolbar-controls' });
+
+    const dateRangeField = controlsRow.createDiv({ cls: 'vulndash-triage-filter' });
+    dateRangeField.createEl('label', { text: 'Date range' });
+    this.dateRangeSelectEl = dateRangeField.createEl('select', { cls: 'vulndash-triage-filter-select' });
+    for (const option of [
+      { label: 'Past Day', value: 'past_day' },
+      { label: 'Past 3 Days', value: 'past_3_days' },
+      { label: 'Past 7 Days', value: 'past_7_days' },
+      { label: 'Custom Range', value: 'custom' }
+    ] as const) {
+      const optionEl = this.dateRangeSelectEl.createEl('option', { text: option.label });
+      optionEl.value = option.value;
+      optionEl.selected = option.value === this.dateRangeSelection.preset;
+    }
+    this.dateRangeSelectEl.addEventListener('change', (event) => {
+      const preset = (event.target as HTMLSelectElement).value as DashboardDateRangeSelection['preset'];
+      this.handleDateRangeSelectionChange({
+        ...this.dateRangeSelection,
+        preset
+      });
+    });
+
+    this.customDateRangeEl = controlsRow.createDiv({ cls: 'vulndash-date-range-custom' });
+    const customFromField = this.customDateRangeEl.createDiv({ cls: 'vulndash-date-range-field' });
+    customFromField.createEl('label', { text: 'From' });
+    this.customDateFromInputEl = customFromField.createEl('input', {
+      cls: 'vulndash-search-bar',
+      attr: { type: 'date' }
+    });
+    this.customDateFromInputEl.value = this.dateRangeSelection.customFrom ?? '';
+    this.customDateFromInputEl.addEventListener('change', (event) => {
+      this.handleDateRangeSelectionChange({
+        ...this.dateRangeSelection,
+        customFrom: (event.target as HTMLInputElement).value
+      });
+    });
+
+    const customToField = this.customDateRangeEl.createDiv({ cls: 'vulndash-date-range-field' });
+    customToField.createEl('label', { text: 'To' });
+    this.customDateToInputEl = customToField.createEl('input', {
+      cls: 'vulndash-search-bar',
+      attr: { type: 'date' }
+    });
+    this.customDateToInputEl.value = this.dateRangeSelection.customTo ?? '';
+    this.customDateToInputEl.addEventListener('change', (event) => {
+      this.handleDateRangeSelectionChange({
+        ...this.dateRangeSelection,
+        customTo: (event.target as HTMLInputElement).value
+      });
+    });
+
+    this.dateRangeValidationEl = filterBar.createDiv({ cls: 'vulndash-date-range-validation' });
+
+    const affectedProjectField = controlsRow.createDiv({ cls: 'vulndash-triage-filter' });
     affectedProjectField.createEl('label', { text: 'Affected project' });
     this.affectedProjectFilterSelectEl = affectedProjectField.createEl('select', { cls: 'vulndash-triage-filter-select' });
     this.affectedProjectFilterSelectEl.addEventListener('change', (event) => {
@@ -580,7 +658,7 @@ export class VulnDashView extends ItemView {
     });
     this.syncAffectedProjectFilterControl();
 
-    this.triageFilterControl.mount(filterBar, this.getTriageFilter());
+    this.triageFilterControl.mount(controlsRow, this.getTriageFilter());
     this.searchInputEl.addEventListener('input', (event) => {
       this.localSearchQuery = (event.target as HTMLInputElement).value.toLowerCase();
       if (this.filterDebounceHandle !== null) {
@@ -594,6 +672,8 @@ export class VulnDashView extends ItemView {
         });
       }, 250);
     });
+
+    this.syncDateRangeControls();
   }
 
   private syncAffectedProjectFilterControl(): void {
@@ -613,6 +693,52 @@ export class VulnDashView extends ItemView {
       optionEl.value = option.value;
       optionEl.selected = option.value === this.affectedProjectFilterValue;
     }
+  }
+
+  private handleDateRangeSelectionChange(nextSelection: DashboardDateRangeSelection): void {
+    this.dateRangeSelection = cloneDashboardDateRangeSelection(nextSelection);
+    const resolution = resolveDashboardDateRangeSelection(this.dateRangeSelection, this.getNow());
+    if (resolution.isValid) {
+      this.appliedDateRangeSelection = cloneDashboardDateRangeSelection(this.dateRangeSelection);
+      void this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
+        forcePatchAll: false,
+        reloadRelationships: false
+      });
+    }
+
+    this.syncDateRangeControls();
+  }
+
+  private syncDateRangeControls(): void {
+    if (this.dateRangeSelectEl) {
+      this.dateRangeSelectEl.value = this.dateRangeSelection.preset;
+    }
+    if (this.customDateFromInputEl) {
+      this.customDateFromInputEl.value = this.dateRangeSelection.customFrom ?? '';
+    }
+    if (this.customDateToInputEl) {
+      this.customDateToInputEl.value = this.dateRangeSelection.customTo ?? '';
+    }
+
+    const isCustom = this.dateRangeSelection.preset === 'custom';
+    if (this.customDateRangeEl) {
+      this.customDateRangeEl.toggleClass('is-visible', isCustom);
+      this.customDateRangeEl.style.display = isCustom ? 'grid' : 'none';
+    }
+
+    if (!this.dateRangeValidationEl) {
+      return;
+    }
+
+    const resolution = resolveDashboardDateRangeSelection(this.dateRangeSelection, this.getNow());
+    if (isCustom && !resolution.isValid) {
+      this.dateRangeValidationEl.textContent = resolution.validationMessage ?? 'Enter a valid custom date range.';
+      this.dateRangeValidationEl.style.display = '';
+      return;
+    }
+
+    this.dateRangeValidationEl.textContent = '';
+    this.dateRangeValidationEl.style.display = 'none';
   }
 
   private compareVulnerabilities(left: Vulnerability, right: Vulnerability, sortKey: SortKey): number {
@@ -733,8 +859,6 @@ export class VulnDashView extends ItemView {
     }
   }
 }
-
-
 
 
 

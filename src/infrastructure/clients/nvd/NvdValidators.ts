@@ -45,6 +45,23 @@ export function validateDateRange(
   };
 }
 
+export function validatePublishedDateRange(
+  publishedFrom: string | undefined,
+  publishedUntil: string | undefined
+): NvdDateRange {
+  const safePublishedFrom = publishedFrom ? validateIsoUtcDate(publishedFrom, 'pubStartDate') : undefined;
+  const safePublishedUntil = publishedUntil ? validateIsoUtcDate(publishedUntil, 'pubEndDate') : undefined;
+
+  if (safePublishedFrom && safePublishedUntil && Date.parse(safePublishedFrom) > Date.parse(safePublishedUntil)) {
+    throw new Error('pubStartDate must be less than or equal to pubEndDate.');
+  }
+
+  return {
+    ...(safePublishedFrom ? { publishedFrom: safePublishedFrom } : {}),
+    ...(safePublishedUntil ? { publishedUntil: safePublishedUntil } : {})
+  };
+}
+
 export function validateStartIndex(startIndex: number): number {
   if (!Number.isInteger(startIndex)) {
     throw new Error('startIndex must be an integer.');

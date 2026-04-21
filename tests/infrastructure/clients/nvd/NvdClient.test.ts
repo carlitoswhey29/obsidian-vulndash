@@ -60,6 +60,41 @@ test('reuses fixed since/until window across NVD pages and advances via API meta
   assert.match(seenUrls[1] ?? '', /startIndex=2/);
 });
 
+test('accepts an explicit published date window for NVD fetches', async () => {
+  let seenUrl = '';
+  const httpClient: IHttpClient = {
+    async getJson(url) {
+      seenUrl = url;
+      return {
+        status: 200,
+        headers: {},
+        data: {
+          startIndex: 0,
+          resultsPerPage: 1,
+          totalResults: 1,
+          vulnerabilities: [{
+            cve: {
+              id: 'CVE-2026-9000',
+              published: '2026-04-20T12:00:00.000Z',
+              lastModified: '2026-04-20T13:00:00.000Z'
+            }
+          }]
+        }
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
+  await client.fetchVulnerabilities({
+    signal: new AbortController().signal,
+    publishedFrom: '2026-04-20T00:00:00.000Z',
+    publishedUntil: '2026-04-20T23:59:59.999Z'
+  });
+
+  assert.match(seenUrl, /pubStartDate=2026-04-20T00%3A00%3A00.000Z/);
+  assert.match(seenUrl, /pubEndDate=2026-04-20T23%3A59%3A59.999Z/);
+});
+
 test('normalizes CPE affected products into readable names', async () => {
   const response: HttpResponse<unknown> = {
     status: 200,
