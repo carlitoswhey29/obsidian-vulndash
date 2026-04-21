@@ -124,6 +124,30 @@ test('maps incremental cursor to GitHub updated filter', async () => {
   assert.match(seenUrl, /since=2026-02-01T00%3A00%3A00.000Z/);
 });
 
+test('filters GitHub advisories by explicit published window after fetch', async () => {
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: [
+          { ghsa_id: 'GHSA-1', summary: 'one', published_at: '2026-04-18T00:00:00.000Z', updated_at: '2026-04-18T00:00:00.000Z' },
+          { ghsa_id: 'GHSA-2', summary: 'two', published_at: '2026-04-21T00:00:00.000Z', updated_at: '2026-04-21T00:00:00.000Z' }
+        ]
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const result = await client.fetchVulnerabilities({
+    signal: new AbortController().signal,
+    publishedFrom: '2026-04-20T00:00:00.000Z',
+    publishedUntil: '2026-04-21T23:59:59.999Z'
+  });
+
+  assert.deepEqual(result.vulnerabilities.map((item) => item.id), ['GHSA-2']);
+});
+
 test('handles empty advisory results', async () => {
   const httpClient: IHttpClient = {
     async getJson() {

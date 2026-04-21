@@ -86,3 +86,45 @@ test('normalizes repo advisories and deduplicates affected products', async () =
   assert.deepEqual(vulnerability?.references, ['https://github.com/advisories/GHSA-repo-1234']);
   assert.deepEqual(vulnerability?.affectedProducts, ['widget', 'widget-api']);
 });
+
+test('filters repo advisories by explicit published window after fetch', async () => {
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: [
+          {
+            ghsa_id: 'GHSA-repo-old',
+            summary: 'Older advisory',
+            published_at: '2026-04-15T00:00:00.000Z',
+            updated_at: '2026-04-15T00:00:00.000Z'
+          },
+          {
+            ghsa_id: 'GHSA-repo-new',
+            summary: 'Current advisory',
+            published_at: '2026-04-21T00:00:00.000Z',
+            updated_at: '2026-04-21T01:00:00.000Z'
+          }
+        ]
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new GitHubRepoClient(
+    httpClient,
+    'github-repo-default',
+    'GitHub Repo',
+    '',
+    'openai/chatgpt',
+    controls
+  );
+
+  const result = await client.fetchVulnerabilities({
+    signal: new AbortController().signal,
+    publishedFrom: '2026-04-20T00:00:00.000Z',
+    publishedUntil: '2026-04-21T23:59:59.999Z'
+  });
+
+  assert.deepEqual(result.vulnerabilities.map((vulnerability) => vulnerability.id), ['GHSA-repo-new']);
+});

@@ -3,6 +3,7 @@ import {
   NVD_RESULTS_PER_PAGE,
   validateApiKey,
   validateDateRange,
+  validatePublishedDateRange,
   validateStartIndex
 } from './NvdValidators';
 import type { NvdRequestParts, NvdRequestQuery } from './NvdTypes';
@@ -11,11 +12,15 @@ export class NvdRequestBuilder {
   public constructor(private readonly apiKey?: string) {}
 
   public buildFetchRequest(
-    since: string | undefined,
-    until: string | undefined,
-    startIndex: number
+    options: {
+      since?: string;
+      until?: string;
+      publishedFrom?: string;
+      publishedUntil?: string;
+      startIndex: number;
+    }
   ): NvdRequestParts {
-    const safeQuery = this.buildFetchQuery(since, until, startIndex);
+    const safeQuery = this.buildFetchQuery(options);
 
     return {
       url: this.buildUrl(safeQuery),
@@ -30,17 +35,21 @@ export class NvdRequestBuilder {
     };
   }
 
-  private buildFetchQuery(
-    since: string | undefined,
-    until: string | undefined,
-    startIndex: number
-  ): NvdRequestQuery {
-    const safeStartIndex = validateStartIndex(startIndex);
-    const safeDateRange = validateDateRange(since, until);
+  private buildFetchQuery(options: {
+    since?: string;
+    until?: string;
+    publishedFrom?: string;
+    publishedUntil?: string;
+    startIndex: number;
+  }): NvdRequestQuery {
+    const safeStartIndex = validateStartIndex(options.startIndex);
+    const safeDateRange = validateDateRange(options.since, options.until);
+    const safePublishedDateRange = validatePublishedDateRange(options.publishedFrom, options.publishedUntil);
 
     return {
       startIndex: safeStartIndex,
-      ...safeDateRange
+      ...safeDateRange,
+      ...safePublishedDateRange
     };
   }
 
@@ -56,6 +65,14 @@ export class NvdRequestBuilder {
 
     if (query.until) {
       params.set('lastModEndDate', query.until);
+    }
+
+    if (query.publishedFrom) {
+      params.set('pubStartDate', query.publishedFrom);
+    }
+
+    if (query.publishedUntil) {
+      params.set('pubEndDate', query.publishedUntil);
     }
 
     return `${NVD_BASE_URL}?${params.toString()}`;

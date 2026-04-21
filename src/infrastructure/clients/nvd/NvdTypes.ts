@@ -5,12 +5,16 @@ export interface NvdCvssMetric {
 export interface NvdDateRange {
   since?: string;
   until?: string;
+  publishedFrom?: string;
+  publishedUntil?: string;
 }
 
 export interface NvdRequestQuery {
   startIndex: number;
   since?: string;
   until?: string;
+  publishedFrom?: string;
+  publishedUntil?: string;
 }
 
 export interface NvdRequestParts {

@@ -1,6 +1,7 @@
 import type { IHttpClient } from '../../../application/ports/HttpClient';
 import type { FetchVulnerabilityOptions, FetchVulnerabilityResult, VulnerabilityFeed } from '../../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../../domain/entities/Vulnerability';
+import { filterVulnerabilitiesByPublishedDateWindow } from '../../../application/dashboard/PublishedDateWindow';
 import { classifySeverity } from '../../../domain/value-objects/CvssScore';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../security/sanitize';
 import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
@@ -105,10 +106,21 @@ export class GitHubRepoClient extends ClientBase implements VulnerabilityFeed {
         }
 
         const normalized = this.normalize(advisory);
-        const key = `${normalized.source}:${normalized.id}`;
+        const filteredBatch = options.publishedFrom || options.publishedUntil
+          ? filterVulnerabilitiesByPublishedDateWindow([normalized], {
+            from: options.publishedFrom ?? new Date(0).toISOString(),
+            to: options.publishedUntil ?? new Date(8640000000000000).toISOString()
+          })
+          : [normalized];
+        const filteredItem = filteredBatch[0];
+        if (!filteredItem) {
+          continue;
+        }
+
+        const key = `${filteredItem.source}:${filteredItem.id}`;
         if (dedup.has(key)) continue;
         dedup.add(key);
-        collected.push(normalized);
+        collected.push(filteredItem);
         newItems += 1;
       }
 
