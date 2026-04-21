@@ -4,7 +4,10 @@ import { VulnerabilityMarkdownSupport } from './VulnerabilityMarkdownSupport';
 
 export interface DailyRollupFindingInput {
   vulnerability: Vulnerability;
-  affectedProjects?: string[];
+  affectedProjects?: Array<{
+    target: string;
+    displayName?: string
+  }>;
   matchedComponents?: Array<{
     name: string;
     version?: string;
@@ -149,14 +152,18 @@ export class DailyRollupMarkdownComposer {
     return builder.build();
   }
 
-  private buildProjectLinks(projects?: string[]): string[] {
+  private buildProjectLinks(
+    projects?: Array<{ target: string; displayName?: string }>
+  ): string[] {
     if (!projects?.length) {
       return [];
     }
 
     return projects
-      .filter((project) => project.trim().length > 0)
-      .map((project) => this.support.formatProjectLink(project));
+      .map((project) =>
+        this.support.formatProjectLink(project.target, project.displayName)
+      )
+      .filter((link) => link.length > 0);
   }
 
   private buildComponentLinks(
@@ -179,12 +186,27 @@ export class DailyRollupMarkdownComposer {
       });
   }
 
-  private formatProjectSummary(projects?: string[]): string {
+  private formatProjectSummary(
+    projects?: Array<{ target: string; displayName?: string }>
+  ): string {
     if (!projects?.length) {
       return 'None';
     }
 
-    return projects.filter((project) => project.trim().length > 0).join(', ') || 'None';
+    const seen = new Set<string>();
+    const values: string[] = [];
+
+    for (const project of projects) {
+      const value = project.displayName?.trim() || project.target.trim();
+      if (!value || seen.has(value)) {
+        continue;
+      }
+
+      seen.add(value);
+      values.push(value);
+    }
+
+    return values.join(', ') || 'None';
   }
 
   private formatComponentSummary(

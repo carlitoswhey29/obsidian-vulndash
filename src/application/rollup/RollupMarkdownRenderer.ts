@@ -1,7 +1,10 @@
-import type { ResolvedAffectedProject } from '../../domain/correlation/AffectedProjectResolution';
 import type { RollupFinding } from '../../domain/rollup/RollupFinding';
 import { formatTriageStateLabel } from '../../domain/triage/TriageState';
-import { WikiLinkFormatter } from '../../infrastructure/obsidian/WikiLinkFormatter';
+import {
+  DailyRollupMarkdownComposer,
+  type DailyRollupFindingInput,
+  type DailyRollupMarkdownComposerInput
+} from '../markdown/DailyRollupMarkdownComposer';
 
 export interface ManagedMarkdownSection {
   readonly content: string;
@@ -13,16 +16,6 @@ export interface RenderedDailyRollup {
   readonly analystNotesPlaceholder: string;
   readonly managedSections: readonly ManagedMarkdownSection[];
   readonly title: string;
-}
-
-interface ProjectFindingGroup {
-  readonly findings: readonly RollupFinding[];
-  readonly project: ResolvedAffectedProject;
-}
-
-interface MutableProjectFindingGroup {
-  findings: RollupFinding[];
-  project: ResolvedAffectedProject;
 }
 
 const asSentence = (value: string): string => {
@@ -48,261 +41,228 @@ const safeInline = (value: string | null | undefined, fallback = 'Not provided')
   return normalized && normalized.length > 0 ? normalized : fallback;
 };
 
-const formatCvss = (score: number | null | undefined): string => {
-  if (typeof score !== 'number' || !Number.isFinite(score)) {
-    return 'N/A';
-  }
-
-  return score.toFixed(1);
-};
-
-const formatFindingDescriptor = (finding: RollupFinding): string =>
-  `**\`${finding.vulnerability.id}\`** | ${safeInline(finding.vulnerability.severity, 'Unknown')} | ${formatTriageStateLabel(finding.triageState)} | CVSS ${formatCvss(finding.vulnerability.cvssScore)}`;
-
 export class RollupMarkdownRenderer {
   public constructor(
-    private readonly wikiLinkFormatter = new WikiLinkFormatter()
+    private readonly composer: DailyRollupMarkdownComposer = new DailyRollupMarkdownComposer()
   ) {}
 
   public render(input: {
     readonly date: string;
     readonly findings: readonly RollupFinding[];
   }): RenderedDailyRollup {
-    const sortedFindings = this.sortFindings(input.findings);
-    const projectGroups = this.groupByProject(sortedFindings);
-    const unmappedFindings = sortedFindings.filter((finding) => finding.unmappedSboms.length > 0);
+    const composerInput = this.mapToComposerInput(input.date, input.findings);
+    const composedMarkdown = this.composer.compose(composerInput);
+    const title = `# ${composerInput.title ?? `Daily Rollup - ${input.date}`}`;
+    const body = this.stripLeadingTitleHeading(composedMarkdown, title);
 
     return {
       analystNotesHeading: '## Analyst Notes',
       analystNotesPlaceholder: '- Add analyst notes, escalation context, and follow-up decisions here.',
       managedSections: [
         {
-          key: 'executive-summary',
-          content: this.renderExecutiveSummary(input.date, sortedFindings, projectGroups, unmappedFindings)
-        },
-        {
-          key: 'affected-projects',
-          content: this.renderAffectedProjects(projectGroups)
-        },
-        {
-          key: 'action-items',
-          content: this.renderActionItems(projectGroups, unmappedFindings)
-        },
-        {
-          key: 'unmapped-findings',
-          content: this.renderUnmappedFindings(unmappedFindings)
+          key: 'daily-rollup',
+          content: body
         }
       ],
-      title: `# VulnDash Briefing ${input.date}`
+      title
     };
+  }
+
+  private mapToComposerInput(
+    date: string,
+    findings: readonly RollupFinding[]
+  ): DailyRollupMarkdownComposerInput {
+    const sortedFindings = this.sortFindings(findings);
+
+    return {
+      generatedAt: date,
+      dateLabel: date,
+      title: `VulnDash Briefing ${date}`,
+      summary: this.buildSummary(sortedFindings),
+      findings: sortedFindings.map((finding) => this.mapFinding(finding))
+    };
+  }
+
+  private mapFinding(finding: RollupFinding): DailyRollupFindingInput {
+    const matchedComponents = this.extractMatchedComponents(finding);
+
+    return {
+      vulnerability: finding.vulnerability,
+      affectedProjects: finding.affectedProjects
+        .map((project) => {
+          const target = project.notePath.trim();
+          const displayName = project.displayName?.trim();
+
+          return {
+            target,
+            ...(displayName ? { displayName } : {})
+          };
+        })
+        .filter((project) => project.target.length > 0),
+      triageState: formatTriageStateLabel(finding.triageState),
+      rationale: this.buildFindingRationale(finding),
+      ...(matchedComponents ? { matchedComponents } : {})
+    };
+  }
+
+  private extractMatchedComponents(
+    finding: RollupFinding
+  ): DailyRollupFindingInput['matchedComponents'] {
+    const affectedPackages = finding.vulnerability.metadata?.affectedPackages ?? [];
+    if (affectedPackages.length === 0) {
+      return undefined;
+    }
+
+    const seen = new Set<string>();
+    const components: NonNullable<DailyRollupFindingInput['matchedComponents']> = [];
+
+    for (const pkg of affectedPackages) {
+      const name = pkg.name?.trim();
+      if (!name) {
+        continue;
+      }
+
+      const version = pkg.version?.trim();
+      const ecosystem = pkg.ecosystem?.trim();
+      const key = `${name}::${version ?? ''}::${ecosystem ?? ''}`;
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+
+      components.push({
+        name,
+        ...(version ? { version } : {}),
+        ...(ecosystem ? { ecosystem } : {})
+      });
+    }
+
+    return components.length > 0 ? components : undefined;
+  }
+
+  private buildSummary(findings: readonly RollupFinding[]): string {
+    if (findings.length === 0) {
+      return 'No findings matched the daily briefing policy for this date.';
+    }
+
+    const uniqueProjectPaths = new Set<string>();
+    let unmappedCount = 0;
+
+    for (const finding of findings) {
+      for (const project of finding.affectedProjects) {
+        uniqueProjectPaths.add(project.notePath);
+      }
+
+      if (finding.unmappedSboms.length > 0) {
+        unmappedCount += 1;
+      }
+    }
+
+    const criticalCount = findings.filter((finding) =>
+      safeInline(finding.vulnerability.severity, 'UNKNOWN').toUpperCase() === 'CRITICAL'
+    ).length;
+
+    const highCount = findings.filter((finding) =>
+      safeInline(finding.vulnerability.severity, 'UNKNOWN').toUpperCase() === 'HIGH'
+    ).length;
+
+    const summaryParts: string[] = [
+      `${findings.length} actionable finding${findings.length === 1 ? '' : 's'} matched the rollup policy`,
+      `${uniqueProjectPaths.size} mapped project${uniqueProjectPaths.size === 1 ? '' : 's'} were impacted`,
+      `${criticalCount} critical and ${highCount} high severit${highCount === 1 ? 'y was' : 'ies were'} identified`
+    ];
+
+    if (unmappedCount > 0) {
+      summaryParts.push(
+        `${unmappedCount} finding${unmappedCount === 1 ? '' : 's'} still require project mapping`
+      );
+    }
+
+    return asSentence(summaryParts.join('; '));
+  }
+
+  private buildFindingRationale(finding: RollupFinding): string {
+    const parts: string[] = [
+      `Included because severity is ${safeInline(finding.vulnerability.severity, 'Unknown')}`,
+      `and triage state is ${formatTriageStateLabel(finding.triageState)}`
+    ];
+
+    if (finding.affectedProjects.length > 0) {
+      const projects = finding.affectedProjects
+        .map((project) => project.displayName.trim())
+        .filter((value) => value.length > 0);
+
+      if (projects.length > 0) {
+        parts.push(`mapped projects: ${projects.join(', ')}`);
+      }
+    }
+
+    if (finding.unmappedSboms.length > 0) {
+      const unmappedLabels = finding.unmappedSboms
+        .map((sbom) => sbom.sbomLabel.trim())
+        .filter((value) => value.length > 0);
+
+      if (unmappedLabels.length > 0) {
+        parts.push(`unmapped SBOMs: ${unmappedLabels.join(', ')}`);
+      }
+    }
+
+    if (finding.triageRecord?.reason?.trim()) {
+      parts.push(`analyst context: ${truncateInline(asSentence(finding.triageRecord.reason), 160)}`);
+    }
+
+    if (finding.triageRecord?.ticketRef?.trim()) {
+      parts.push(`ticket: ${finding.triageRecord.ticketRef.trim()}`);
+    }
+
+    return asSentence(parts.join('; '));
+  }
+
+  private stripLeadingTitleHeading(markdown: string, titleHeading: string): string {
+    const normalizedMarkdown = markdown.replace(/\r\n/g, '\n').trim();
+    const normalizedTitleHeading = titleHeading.trim();
+
+    if (!normalizedMarkdown.startsWith(normalizedTitleHeading)) {
+      return normalizedMarkdown;
+    }
+
+    const stripped = normalizedMarkdown.slice(normalizedTitleHeading.length).replace(/^\n+/, '');
+    return stripped.trim();
   }
 
   private sortFindings(findings: readonly RollupFinding[]): RollupFinding[] {
     const severityWeight: Record<string, number> = {
-      'CRITICAL': 5,
-      'HIGH': 4,
-      'MEDIUM': 3,
-      'LOW': 2,
-      'INFORMATIONAL': 1,
-      'UNKNOWN': 0
+      CRITICAL: 5,
+      HIGH: 4,
+      MEDIUM: 3,
+      LOW: 2,
+      INFORMATIONAL: 1,
+      UNKNOWN: 0
     };
 
     return [...findings].sort((left, right) => {
-      const leftSev = safeInline(left.vulnerability.severity, 'UNKNOWN').toUpperCase();
-      const rightSev = safeInline(right.vulnerability.severity, 'UNKNOWN').toUpperCase();
+      const leftSeverity = safeInline(left.vulnerability.severity, 'UNKNOWN').toUpperCase();
+      const rightSeverity = safeInline(right.vulnerability.severity, 'UNKNOWN').toUpperCase();
 
-      // 1. Sort by Severity Weight (Descending)
-      const weightDiff = (severityWeight[rightSev] ?? 0) - (severityWeight[leftSev] ?? 0);
-      if (weightDiff !== 0) {
-        return weightDiff;
+      const severityDiff = (severityWeight[rightSeverity] ?? 0) - (severityWeight[leftSeverity] ?? 0);
+      if (severityDiff !== 0) {
+        return severityDiff;
       }
 
-      // 2. Sort by CVSS Score (Descending)
-      const rightCvss = right.vulnerability.cvssScore ?? -1;
-      const leftCvss = left.vulnerability.cvssScore ?? -1;
+      const rightCvss = Number.isFinite(right.vulnerability.cvssScore)
+        ? right.vulnerability.cvssScore
+        : -1;
+      const leftCvss = Number.isFinite(left.vulnerability.cvssScore)
+        ? left.vulnerability.cvssScore
+        : -1;
+
       if (rightCvss !== leftCvss) {
         return rightCvss - leftCvss;
       }
 
-      // 3. Fallback to ID (Ascending)
       return left.vulnerability.id.localeCompare(right.vulnerability.id);
     });
-  }
-
-  private groupByProject(findings: readonly RollupFinding[]): ProjectFindingGroup[] {
-    const groups = new Map<string, MutableProjectFindingGroup>();
-
-    for (const finding of findings) {
-      for (const project of finding.affectedProjects) {
-        const existing = groups.get(project.notePath);
-
-        if (existing) {
-          if (!existing.findings.some((entry) => entry.vulnerability.id === finding.vulnerability.id)) {
-            existing.findings.push(finding);
-          }
-          continue;
-        }
-
-        groups.set(project.notePath, {
-          findings: [finding],
-          project
-        });
-      }
-    }
-
-    return Array.from(groups.values())
-      .map((group) => ({
-        project: group.project,
-        findings: this.sortFindings(group.findings)
-      }))
-      .sort((left, right) =>
-        left.project.displayName.localeCompare(right.project.displayName)
-        || left.project.notePath.localeCompare(right.project.notePath));
-  }
-
-  private renderExecutiveSummary(
-    date: string,
-    findings: readonly RollupFinding[],
-    projectGroups: readonly ProjectFindingGroup[],
-    unmappedFindings: readonly RollupFinding[]
-  ): string {
-    if (findings.length === 0) {
-      return [
-        '## Executive Summary',
-        '',
-        '> [!success] All Clear',
-        `> No findings matched the daily briefing policy for ${date}.`,
-        '> ',
-        '> Existing analyst notes remain below for continuity.'
-      ].join('\n');
-    }
-
-    const uniqueProjects = projectGroups.map((group) =>
-      this.wikiLinkFormatter.format(group.project.notePath, group.project.displayName));
-
-    const severityCounts = new Map<string, number>();
-    for (const finding of findings) {
-      const severity = safeInline(finding.vulnerability.severity, 'Unknown');
-      severityCounts.set(severity, (severityCounts.get(severity) ?? 0) + 1);
-    }
-
-    const severityWeight: Record<string, number> = {
-      'CRITICAL': 5, 'HIGH': 4, 'MEDIUM': 3, 'LOW': 2, 'INFORMATIONAL': 1, 'UNKNOWN': 0
-    };
-
-    const severitySummary = Array.from(severityCounts.entries())
-      .sort((left, right) => (severityWeight[right[0].toUpperCase()] ?? 0) - (severityWeight[left[0].toUpperCase()] ?? 0))
-      .map(([severity, count]) => `**${count}** ${severity}`)
-      .join(', ');
-
-    return [
-      '## Executive Summary',
-      '',
-      '> [!summary] Threat Intelligence Snapshot',
-      `> - **Total Findings:** ${findings.length} actionable finding${findings.length === 1 ? '' : 's'} matched the policy.`,
-      `> - **Severity Mix:** ${severitySummary}.`,
-      uniqueProjects.length > 0
-        ? `> - **Impacted Projects:** ${uniqueProjects.length} mapped project${uniqueProjects.length === 1 ? '' : 's'} require review.`
-        : '> - **Impacted Projects:** No mapped project notes were resolved.',
-      unmappedFindings.length > 0
-        ? `> - **Pending Triage:** ${unmappedFindings.length} finding${unmappedFindings.length === 1 ? '' : 's'} need project mapping.`
-        : '> - **Pending Triage:** None.'
-    ].join('\n');
-  }
-
-  private renderAffectedProjects(projectGroups: readonly ProjectFindingGroup[]): string {
-    if (projectGroups.length === 0) {
-      return [
-        '## Affected Projects',
-        '',
-        '- *No mapped project findings matched the current rollup policy.*'
-      ].join('\n');
-    }
-
-    const lines: string[] = ['## Affected Projects', ''];
-
-    for (const group of projectGroups) {
-      lines.push(`### ${this.wikiLinkFormatter.format(group.project.notePath, group.project.displayName)}`);
-      lines.push('');
-
-      for (const finding of group.findings) {
-        lines.push(`- ${formatFindingDescriptor(finding)}`);
-        lines.push(`  - **Title:** ${safeInline(finding.vulnerability.title)}`);
-
-        const summary = asSentence(truncateInline(safeInline(finding.vulnerability.summary, 'No summary provided')));
-        lines.push(`  - **Summary:** ${summary}`);
-
-        const sourceSboms = group.project.sourceSbomLabels.length > 0
-          ? group.project.sourceSbomLabels.join(', ')
-          : 'None linked';
-        lines.push(`  - **Source SBOMs:** ${sourceSboms}`);
-
-        if (finding.triageRecord?.ticketRef?.trim()) {
-          lines.push(`  - **Ticket:** ${finding.triageRecord.ticketRef.trim()}`);
-        }
-
-        if (finding.triageRecord?.reason?.trim()) {
-          lines.push(`  - **Analyst Context:** ${asSentence(truncateInline(finding.triageRecord.reason, 140))}`);
-        }
-
-        lines.push('');
-      }
-    }
-
-    return lines.join('\n').trimEnd();
-  }
-
-  private renderActionItems(
-    projectGroups: readonly ProjectFindingGroup[],
-    unmappedFindings: readonly RollupFinding[]
-  ): string {
-    const tasks: string[] = ['## Action Items', '', '> [!todo] Required Reviews'];
-
-    for (const group of projectGroups) {
-      const projectLink = this.wikiLinkFormatter.format(group.project.notePath, group.project.displayName);
-
-      for (const finding of group.findings) {
-        tasks.push(
-          `> - [ ] Assess **${finding.vulnerability.id}** (${safeInline(finding.vulnerability.severity, 'Unknown')}, ${formatTriageStateLabel(finding.triageState)}) for ${projectLink}`
-        );
-      }
-    }
-
-    for (const finding of unmappedFindings) {
-      const unmappedLabels = finding.unmappedSboms.map((sbom) => sbom.sbomLabel).join(', ');
-      tasks.push(
-        `> - [ ] Map **${finding.vulnerability.id}** to an internal project note (Source: *${unmappedLabels || 'Unknown SBOM'}*)`
-      );
-    }
-
-    if (tasks.length === 3) {
-      tasks.push('> - [x] No action items required today.');
-    }
-
-    return tasks.join('\n');
-  }
-
-  private renderUnmappedFindings(findings: readonly RollupFinding[]): string {
-    if (findings.length === 0) {
-      return [
-        '## Unmapped Findings',
-        '',
-        '- *No unmapped findings matched the current rollup policy.*'
-      ].join('\n');
-    }
-
-    const lines: string[] = ['## Unmapped Findings', ''];
-
-    for (const finding of findings) {
-      const labels = finding.unmappedSboms.map((sbom) => sbom.sbomLabel).join(', ');
-
-      lines.push(`- ${formatFindingDescriptor(finding)}`);
-      lines.push(`  - **Title:** ${safeInline(finding.vulnerability.title)}`);
-      lines.push(`  - **Summary:** ${asSentence(truncateInline(safeInline(finding.vulnerability.summary, 'No summary provided')))}`);
-      lines.push(`  - **Unmapped SBOMs:** ${labels || 'Unknown SBOM'}`);
-      lines.push('');
-    }
-
-    return lines.join('\n').trimEnd();
   }
 }
