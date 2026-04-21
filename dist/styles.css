@@ -868,6 +868,26 @@
   letter-spacing: 0.02em;
 }
 
+/* Column Widths for 9-column layout */
+.vulndash-component-table th:nth-child(1),
+.vulndash-component-table td:nth-child(1) { width: 42%; } /* Component */
+
+.vulndash-component-table th:nth-child(2),
+.vulndash-component-table td:nth-child(2) { width: 10%; } /* License */
+
+.vulndash-component-table th:nth-child(3),
+.vulndash-component-table td:nth-child(3) { width: 28%; } /* Identifier */
+
+.vulndash-component-table th:nth-child(4),
+.vulndash-component-table td:nth-child(4) { width: 5%; } /* Sources */
+
+.vulndash-component-table th:nth-child(5),
+.vulndash-component-table td:nth-child(5) { width: 5%; } /* Vulnerabilities */
+
+.vulndash-component-table th:nth-child(6),
+.vulndash-component-table td:nth-child(6) { width: 10%; } /* Actions */
+
+
 .vulndash-component-row.is-followed {
   background: color-mix(in srgb, var(--color-green, #22c55e) 6%, transparent);
 }
