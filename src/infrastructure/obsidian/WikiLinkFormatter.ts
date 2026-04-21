@@ -1,5 +1,16 @@
+export interface WikiLinkParts {
+  target: string;
+  displayName?: string;
+}
+
 const normalizeWikiLinkValue = (value: string): string =>
-  value.replace(/[\]|]/g, '').trim();
+  value
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/[[\]#^|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const normalizeNotePath = (value: string): string =>
   value
@@ -11,17 +22,31 @@ const normalizeNotePath = (value: string): string =>
 
 export class WikiLinkFormatter {
   public format(notePath: string, displayName?: string): string {
-    const normalizedPath = normalizeWikiLinkValue(normalizeNotePath(notePath));
-    const normalizedDisplayName = normalizeWikiLinkValue(displayName ?? '');
+    const normalizedPath = this.normalizeTarget(notePath);
+    const normalizedDisplayName = this.normalizeDisplayName(displayName ?? '');
 
     if (!normalizedPath) {
-      return normalizedDisplayName ? `[[${normalizedDisplayName}]]` : '[[]]';
+      return normalizedDisplayName ? `[[${normalizedDisplayName}]]` : '';
     }
 
-    if (!normalizedDisplayName || normalizedDisplayName === normalizedPath.split('/').at(-1)) {
+    const defaultDisplayName = normalizedPath.split('/').at(-1) ?? normalizedPath;
+
+    if (!normalizedDisplayName || normalizedDisplayName === defaultDisplayName) {
       return `[[${normalizedPath}]]`;
     }
 
     return `[[${normalizedPath}|${normalizedDisplayName}]]`;
+  }
+
+  public formatParts(parts: WikiLinkParts): string {
+    return this.format(parts.target, parts.displayName);
+  }
+
+  public normalizeTarget(notePath: string): string {
+    return normalizeWikiLinkValue(normalizeNotePath(notePath));
+  }
+
+  public normalizeDisplayName(displayName: string): string {
+    return normalizeWikiLinkValue(displayName);
   }
 }
