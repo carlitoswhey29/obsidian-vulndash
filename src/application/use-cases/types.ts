@@ -4,6 +4,8 @@ import type { TriageFilterMode } from '../triage/FilterByTriageState';
 import type { TriageState } from '../../domain/triage/TriageState';
 
 export type DashboardSortOrder = 'publishedAt' | 'cvssScore';
+export type DashboardDateField = 'published' | 'modified';
+export type DashboardDateRangePreset = 'past_day' | 'past_3_days' | 'past_7_days' | 'custom';
 
 
 
@@ -133,6 +135,7 @@ export interface VulnDashSettings {
   cacheDurationMs: number;
   maxResults: number;
   defaultSortOrder: DashboardSortOrder;
+  dashboardDateField: DashboardDateField;
   colorCodedSeverity: boolean;
   columnVisibility: ColumnVisibility;
   triageFilter: TriageFilterMode;

@@ -206,6 +206,21 @@ export class VulnDashSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName('Dashboard date field')
+      .setDesc('Controls whether the dashboard date range uses modified time or published time.')
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOptions({ modified: 'Modified Time', published: 'Published Time' })
+          .setValue(settings.dashboardDateField)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({
+              ...this.plugin.getSettings(),
+              dashboardDateField: value as VulnDashSettings['dashboardDateField']
+            });
+          });
+      });
+
+    new Setting(containerEl)
       .setName('Color-coded severity')
       .setDesc('Applies severity CSS classes (for CRITICAL/HIGH rows).')
       .addToggle((toggle) => toggle.setValue(settings.colorCodedSeverity).onChange(async (value) => {
@@ -355,6 +370,24 @@ export class VulnDashSettingTab extends PluginSettingTab {
           feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd' ? { ...feed, enabled: value } : feed))
         });
       }));
+
+    new Setting(containerEl)
+      .setName('NVD date filter field')
+      .setDesc('Controls whether NVD sync windows use last modified timestamps or published timestamps.')
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOptions({ modified: 'Modified Time', published: 'Published Time' })
+          .setValue(getNvdFeed(settings)?.dateFilterType ?? 'modified')
+          .onChange(async (value) => {
+            const current = this.plugin.getSettings();
+            await this.plugin.updateSettings({
+              ...current,
+              feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+                ? { ...feed, dateFilterType: value as 'modified' | 'published' }
+                : feed))
+            });
+          });
+      });
 
     new Setting(containerEl)
       .setName('Enable GitHub advisories feed')

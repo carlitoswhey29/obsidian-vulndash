@@ -148,6 +148,30 @@ test('filters GitHub advisories by explicit published window after fetch', async
   assert.deepEqual(result.vulnerabilities.map((item) => item.id), ['GHSA-2']);
 });
 
+test('filters GitHub advisories by explicit modified window after fetch', async () => {
+  const httpClient: IHttpClient = {
+    async getJson() {
+      return {
+        status: 200,
+        headers: {},
+        data: [
+          { ghsa_id: 'GHSA-1', summary: 'one', published_at: '2026-04-10T00:00:00.000Z', updated_at: '2026-04-18T00:00:00.000Z' },
+          { ghsa_id: 'GHSA-2', summary: 'two', published_at: '2026-04-10T00:00:00.000Z', updated_at: '2026-04-21T00:00:00.000Z' }
+        ]
+      } as HttpResponse<never>;
+    }
+  };
+
+  const client = new GitHubAdvisoryClient(httpClient, 'github-advisories-default', 'GitHub', '', controls);
+  const result = await client.fetchVulnerabilities({
+    signal: new AbortController().signal,
+    modifiedFrom: '2026-04-20T00:00:00.000Z',
+    modifiedUntil: '2026-04-21T23:59:59.999Z'
+  });
+
+  assert.deepEqual(result.vulnerabilities.map((item) => item.id), ['GHSA-2']);
+});
+
 test('handles empty advisory results', async () => {
   const httpClient: IHttpClient = {
     async getJson() {

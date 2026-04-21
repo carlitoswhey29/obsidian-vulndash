@@ -5,6 +5,7 @@ import {
   validateApiKey,
   validateDateRange,
   validateIsoUtcDate,
+  validateModifiedDateRange,
   validatePublishedDateRange,
   validateStartIndex
 } from '../../../../src/infrastructure/clients/nvd/NvdValidators';
@@ -35,6 +36,15 @@ test('validatePublishedDateRange preserves valid UTC bounds', () => {
   });
 });
 
+test('validateModifiedDateRange preserves valid UTC bounds', () => {
+  const range = validateModifiedDateRange('2026-04-20T00:00:00.000Z', '2026-04-20T23:59:59.999Z');
+
+  assert.deepEqual(range, {
+    modifiedFrom: '2026-04-20T00:00:00.000Z',
+    modifiedUntil: '2026-04-20T23:59:59.999Z'
+  });
+});
+
 test('validateIsoUtcDate accepts valid UTC timestamps', () => {
   assert.equal(
     validateIsoUtcDate('2026-04-15T00:00:00.000Z', 'lastModStartDate'),
@@ -53,6 +63,13 @@ test('validatePublishedDateRange rejects inverted ranges', () => {
   assert.throws(
     () => validatePublishedDateRange('2026-04-21T00:00:00.000Z', '2026-04-20T23:59:59.999Z'),
     /pubStartDate must be less than or equal to pubEndDate/
+  );
+});
+
+test('validateModifiedDateRange rejects inverted ranges', () => {
+  assert.throws(
+    () => validateModifiedDateRange('2026-04-21T00:00:00.000Z', '2026-04-20T23:59:59.999Z'),
+    /lastModStartDate must be less than or equal to lastModEndDate/
   );
 });
 

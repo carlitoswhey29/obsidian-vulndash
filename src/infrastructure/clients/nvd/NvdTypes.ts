@@ -7,6 +7,8 @@ export interface NvdDateRange {
   until?: string;
   publishedFrom?: string;
   publishedUntil?: string;
+  modifiedFrom?: string;
+  modifiedUntil?: string;
 }
 
 export interface NvdRequestQuery {
@@ -15,6 +17,8 @@ export interface NvdRequestQuery {
   until?: string;
   publishedFrom?: string;
   publishedUntil?: string;
+  modifiedFrom?: string;
+  modifiedUntil?: string;
 }
 
 export interface NvdRequestParts {

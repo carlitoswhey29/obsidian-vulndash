@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_DASHBOARD_DATE_RANGE,
+  filterVulnerabilitiesByDateWindow,
   filterVulnerabilitiesByPublishedDateWindow,
   resolveDashboardDateRangeSelection
 } from '../../../src/application/dashboard/PublishedDateWindow';
@@ -73,4 +74,19 @@ test('published date window filter keeps only findings inside the inclusive wind
   });
 
   assert.deepEqual(filtered.map((vulnerability) => vulnerability.id), ['CVE-1', 'CVE-2']);
+});
+
+test('modified date window filter can target updated timestamps', () => {
+  const vulnerabilities = [
+    { ...createVulnerability('CVE-1', '2026-04-01T00:00:00.000Z'), updatedAt: '2026-04-18T00:00:00.000Z' },
+    { ...createVulnerability('CVE-2', '2026-04-01T00:00:00.000Z'), updatedAt: '2026-04-21T10:30:00.000Z' },
+    { ...createVulnerability('CVE-3', '2026-04-01T00:00:00.000Z'), updatedAt: '2026-04-22T00:00:00.000Z' }
+  ];
+
+  const filtered = filterVulnerabilitiesByDateWindow(vulnerabilities, {
+    from: '2026-04-20T00:00:00.000Z',
+    to: '2026-04-21T23:59:59.999Z'
+  }, 'modified');
+
+  assert.deepEqual(filtered.map((vulnerability) => vulnerability.id), ['CVE-2']);
 });

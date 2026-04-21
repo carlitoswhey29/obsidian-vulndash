@@ -907,17 +907,18 @@
   font-size: var(--font-ui-smaller);
   text-transform: uppercase;
   letter-spacing: 0.02em;
+  justify-content: left;
 }
 
 /* Column Widths for 9-column layout */
 .vulndash-component-table th:nth-child(1),
-.vulndash-component-table td:nth-child(1) { width: 42%; } /* Component */
+.vulndash-component-table td:nth-child(1) { width: 38%; } /* Component */
 
 .vulndash-component-table th:nth-child(2),
-.vulndash-component-table td:nth-child(2) { width: 10%; } /* License */
+.vulndash-component-table td:nth-child(2) { width: 12%; } /* License */
 
 .vulndash-component-table th:nth-child(3),
-.vulndash-component-table td:nth-child(3) { width: 28%; } /* Identifier */
+.vulndash-component-table td:nth-child(3) { width: 30%; } /* Identifier */
 
 .vulndash-component-table th:nth-child(4),
 .vulndash-component-table td:nth-child(4) { width: 5%; } /* Sources */

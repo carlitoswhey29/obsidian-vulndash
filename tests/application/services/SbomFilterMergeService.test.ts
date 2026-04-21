@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS: VulnDashSettings = {
   cacheDurationMs: 60_000,
   maxResults: 200,
   defaultSortOrder: 'publishedAt',
+  dashboardDateField: 'modified',
   colorCodedSeverity: true,
   columnVisibility: {
     id: true,
@@ -66,7 +67,7 @@ const DEFAULT_SETTINGS: VulnDashSettings = {
     pruneBatchSize: 250,
     ttlMs: 2592000000
   },
-  settingsVersion: 8,
+  settingsVersion: 9,
   feeds: []
 };
 

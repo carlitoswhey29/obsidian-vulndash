@@ -5,13 +5,13 @@ import { FilterByAffectedProject, type AffectedProjectFilter } from '../../appli
 import {
   DEFAULT_DASHBOARD_DATE_RANGE,
   cloneDashboardDateRangeSelection,
-  filterVulnerabilitiesByPublishedDateWindow,
+  filterVulnerabilitiesByDateWindow,
   resolveDashboardDateRangeSelection,
   type DashboardDateRangeSelection
 } from '../../application/dashboard/PublishedDateWindow';
 import type { ComponentInventoryWorkspaceSnapshot } from '../../application/sbom/types';
 import type { TriageFilterMode } from '../../application/triage/FilterByTriageState';
-import type { DashboardSortOrder, VulnDashSettings } from '../../application/use-cases/types';
+import type { DashboardDateField, DashboardSortOrder, VulnDashSettings } from '../../application/use-cases/types';
 import { RelationshipNormalizer } from '../../application/sbom/RelationshipNormalizer';
 import {
   EMPTY_AFFECTED_PROJECT_RESOLUTION,
@@ -69,6 +69,8 @@ export class VulnDashView extends ItemView {
   private customDateFromInputEl: HTMLInputElement | null = null;
   private customDateToInputEl: HTMLInputElement | null = null;
   private customDateRangeEl: HTMLDivElement | null = null;
+  private dashboardDateField: DashboardDateField = 'modified';
+  private dashboardDateFieldSelectEl: HTMLSelectElement | null = null;
   private dateRangeSelectEl: HTMLSelectElement | null = null;
   private dateRangeValidationEl: HTMLDivElement | null = null;
   private dateRangeSelection = cloneDashboardDateRangeSelection(DEFAULT_DASHBOARD_DATE_RANGE);
@@ -80,6 +82,7 @@ export class VulnDashView extends ItemView {
   private filterDebounceHandle: number | null = null;
   private maxResults = 100;
   private newItems = new Set<string>();
+  private readonly onDashboardDateFieldChange: (field: DashboardDateField) => Promise<void>;
   private readonly onGenerateDailyRollup: () => Promise<void>;
   private readonly onTriageFilterChange: (triageFilter: TriageFilterMode) => Promise<void>;
   private readonly onTriageStateChange: (vulnerability: Vulnerability, state: TriageState) => Promise<void>;
@@ -125,9 +128,11 @@ export class VulnDashView extends ItemView {
       disableComponent: (componentKey: string) => Promise<void>;
       enableComponent: (componentKey: string) => Promise<void>;
       followComponent: (componentKey: string) => Promise<void>;
+      getDashboardDateField: () => DashboardDateField;
       getTriageFilter: () => TriageFilterMode;
       getNow?: () => Date;
       loadComponentInventory: () => Promise<ComponentInventoryWorkspaceSnapshot>;
+      onDashboardDateFieldChange: (field: DashboardDateField) => Promise<void>;
       onGenerateDailyRollup: () => Promise<void>;
       onTriageFilterChange: (triageFilter: TriageFilterMode) => Promise<void>;
       onTriageStateChange: (vulnerability: Vulnerability, state: TriageState) => Promise<void>;
@@ -138,9 +143,11 @@ export class VulnDashView extends ItemView {
     super(leaf);
     this.componentDetailsRenderer = new ComponentDetailsRenderer(this.app, '');
     this.addChild(this.componentDetailsRenderer);
+    this.dashboardDateField = callbacks.getDashboardDateField();
     this.getTriageFilter = callbacks.getTriageFilter;
     this.getNow = callbacks.getNow ?? (() => new Date());
     this.loadComponentInventory = callbacks.loadComponentInventory;
+    this.onDashboardDateFieldChange = callbacks.onDashboardDateFieldChange;
     this.onGenerateDailyRollup = callbacks.onGenerateDailyRollup;
     this.onTriageFilterChange = callbacks.onTriageFilterChange;
     this.onTriageStateChange = callbacks.onTriageStateChange;
@@ -228,12 +235,14 @@ export class VulnDashView extends ItemView {
     this.sortKey = this.getDefaultSort(settings.defaultSortOrder);
     this.sortDesc = true;
     this.maxResults = settings.maxResults;
+    this.dashboardDateField = settings.dashboardDateField;
     this.colorCodedSeverity = settings.colorCodedSeverity;
     this.columnVisibility = settings.columnVisibility;
     this.triageFilterControl.setValue(settings.triageFilter);
     this.componentWorkspaceDirty = true;
     this.componentWorkspaceSnapshot = null;
     this.componentInventoryView.invalidate();
+    this.syncDateRangeControls();
 
     if (this.activeTab === 'vulnerabilities') {
       void this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
@@ -359,7 +368,7 @@ export class VulnDashView extends ItemView {
     const columns = this.getVisibleColumns();
 
     if (vulnerabilities.length === 0) {
-      const hasInteractiveFilters = Boolean(this.localSearchQuery)
+    const hasInteractiveFilters = Boolean(this.localSearchQuery)
         || this.affectedProjectFilterValue !== ALL_AFFECTED_PROJECT_FILTER_VALUE
         || this.appliedDateRangeSelection.preset !== DEFAULT_DASHBOARD_DATE_RANGE.preset;
       return {
@@ -403,7 +412,7 @@ export class VulnDashView extends ItemView {
     let data = this.getSorted();
     const dateRangeResolution = resolveDashboardDateRangeSelection(this.appliedDateRangeSelection, this.getNow());
     if (dateRangeResolution.window) {
-      data = filterVulnerabilitiesByPublishedDateWindow(data, dateRangeResolution.window);
+      data = filterVulnerabilitiesByDateWindow(data, dateRangeResolution.window, this.dashboardDateField);
     }
     data = this.affectedProjectFilter.execute(
       data,
@@ -594,6 +603,28 @@ export class VulnDashView extends ItemView {
 
     const controlsRow = filterBar.createDiv({ cls: 'vulndash-vulnerability-toolbar-controls' });
 
+    const dateField = controlsRow.createDiv({ cls: 'vulndash-triage-filter' });
+    dateField.createEl('label', { text: 'Use' });
+    this.dashboardDateFieldSelectEl = dateField.createEl('select', { cls: 'vulndash-triage-filter-select' });
+    for (const option of [
+      { label: 'Modified Time', value: 'modified' },
+      { label: 'Published Time', value: 'published' }
+    ] as const) {
+      const optionEl = this.dashboardDateFieldSelectEl.createEl('option', { text: option.label });
+      optionEl.value = option.value;
+      optionEl.selected = option.value === this.dashboardDateField;
+    }
+    this.dashboardDateFieldSelectEl.addEventListener('change', (event) => {
+      const field = (event.target as HTMLSelectElement).value as DashboardDateField;
+      this.dashboardDateField = field;
+      void this.onDashboardDateFieldChange(field);
+      void this.refreshVulnerabilityTable(EMPTY_CHANGE_HINTS, {
+        forcePatchAll: false,
+        reloadRelationships: false
+      });
+      this.syncDateRangeControls();
+    });
+
     const dateRangeField = controlsRow.createDiv({ cls: 'vulndash-triage-filter' });
     dateRangeField.createEl('label', { text: 'Date range' });
     this.dateRangeSelectEl = dateRangeField.createEl('select', { cls: 'vulndash-triage-filter-select' });
@@ -710,6 +741,9 @@ export class VulnDashView extends ItemView {
   }
 
   private syncDateRangeControls(): void {
+    if (this.dashboardDateFieldSelectEl) {
+      this.dashboardDateFieldSelectEl.value = this.dashboardDateField;
+    }
     if (this.dateRangeSelectEl) {
       this.dateRangeSelectEl.value = this.dateRangeSelection.preset;
     }

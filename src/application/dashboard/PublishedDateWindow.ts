@@ -1,9 +1,8 @@
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
+import type { DashboardDateField, DashboardDateRangePreset } from '../use-cases/types';
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-export type DashboardDateRangePreset = 'past_day' | 'past_3_days' | 'past_7_days' | 'custom';
 
 export interface DashboardDateRangeSelection {
   readonly preset: DashboardDateRangePreset;
@@ -121,6 +120,14 @@ export const filterVulnerabilitiesByPublishedDateWindow = (
   vulnerabilities: readonly Vulnerability[],
   window: ResolvedPublishedDateWindow
 ): Vulnerability[] => {
+  return filterVulnerabilitiesByDateWindow(vulnerabilities, window, 'published');
+};
+
+export const filterVulnerabilitiesByDateWindow = (
+  vulnerabilities: readonly Vulnerability[],
+  window: ResolvedPublishedDateWindow,
+  field: DashboardDateField
+): Vulnerability[] => {
   const fromMs = Date.parse(window.from);
   const toMs = Date.parse(window.to);
   if (Number.isNaN(fromMs) || Number.isNaN(toMs)) {
@@ -128,7 +135,8 @@ export const filterVulnerabilitiesByPublishedDateWindow = (
   }
 
   return vulnerabilities.filter((vulnerability) => {
-    const publishedAtMs = Date.parse(vulnerability.publishedAt);
-    return !Number.isNaN(publishedAtMs) && publishedAtMs >= fromMs && publishedAtMs <= toMs;
+    const timestamp = field === 'modified' ? vulnerability.updatedAt : vulnerability.publishedAt;
+    const timestampMs = Date.parse(timestamp);
+    return !Number.isNaN(timestampMs) && timestampMs >= fromMs && timestampMs <= toMs;
   });
 };

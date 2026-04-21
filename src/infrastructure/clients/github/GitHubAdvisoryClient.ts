@@ -7,7 +7,7 @@ import type {
   VulnerabilityMetadata,
   VulnerabilitySourceUrls
 } from '../../../domain/entities/Vulnerability';
-import { filterVulnerabilitiesByPublishedDateWindow } from '../../../application/dashboard/PublishedDateWindow';
+import { filterVulnerabilitiesByDateWindow } from '../../../application/dashboard/PublishedDateWindow';
 import { classifySeverity } from '../../../domain/value-objects/CvssScore';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../security/sanitize';
 import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
@@ -144,11 +144,11 @@ export class GitHubAdvisoryClient extends ClientBase implements VulnerabilityFee
           break;
         }
         const normalized = this.normalize(advisory, this.name);
-        const filteredBatch = options.publishedFrom || options.publishedUntil
-          ? filterVulnerabilitiesByPublishedDateWindow([normalized], {
-            from: options.publishedFrom ?? new Date(0).toISOString(),
-            to: options.publishedUntil ?? new Date(8640000000000000).toISOString()
-          })
+        const filteredBatch = options.publishedFrom || options.publishedUntil || options.modifiedFrom || options.modifiedUntil
+          ? filterVulnerabilitiesByDateWindow([normalized], {
+            from: options.modifiedFrom ?? options.publishedFrom ?? new Date(0).toISOString(),
+            to: options.modifiedUntil ?? options.publishedUntil ?? new Date(8640000000000000).toISOString()
+          }, options.modifiedFrom || options.modifiedUntil ? 'modified' : 'published')
           : [normalized];
         const filteredItem = filteredBatch[0];
         if (!filteredItem) {

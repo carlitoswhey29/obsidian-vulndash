@@ -8,6 +8,7 @@ import type { RetryPolicy } from '../common/RetryPolicy';
 import type { NvdRequestParts, NvdResponse } from './NvdTypes';
 import { NvdMapper } from './NvdMapper';
 import { NvdRequestBuilder } from './NvdRequestBuilder';
+import { filterVulnerabilitiesByDateWindow } from '../../../application/dashboard/PublishedDateWindow';
 
 export interface NvdClientDependencies {
   logger?: ClientLogger;
@@ -54,6 +55,10 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
         startIndex,
         ...(options.since ? { since: options.since } : {}),
         ...(options.until ? { until: options.until } : {}),
+        ...(options.publishedFrom ? { publishedFrom: options.publishedFrom } : {}),
+        ...(options.publishedUntil ? { publishedUntil: options.publishedUntil } : {}),
+        ...(options.modifiedFrom ? { modifiedFrom: options.modifiedFrom } : {}),
+        ...(options.modifiedUntil ? { modifiedUntil: options.modifiedUntil } : {}),
         signal: options.signal,
         operationName: 'fetchVulnerabilities'
       });
@@ -65,8 +70,14 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
         .map((item) => item.cve)
         .filter((cve): cve is NonNullable<typeof cve> => Boolean(cve?.id))
         .map((cve) => this.mapper.normalize(cve));
+      const filteredItems = options.publishedFrom || options.publishedUntil || options.modifiedFrom || options.modifiedUntil
+        ? filterVulnerabilitiesByDateWindow(items, {
+          from: options.modifiedFrom ?? options.publishedFrom ?? new Date(0).toISOString(),
+          to: options.modifiedUntil ?? options.publishedUntil ?? new Date(8640000000000000).toISOString()
+        }, options.modifiedFrom || options.modifiedUntil ? 'modified' : 'published')
+        : items;
 
-      for (const item of items) {
+      for (const item of filteredItems) {
         if (collected.length >= this.controls.maxItems) {
           warnings.push('max_items_reached');
           break;
@@ -112,15 +123,15 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
       startIndex: number;
       since?: string;
       until?: string;
+      publishedFrom?: string;
+      publishedUntil?: string;
+      modifiedFrom?: string;
+      modifiedUntil?: string;
       signal: AbortSignal;
       operationName: string;
     }
   ): Promise<{ response: HttpResponse<NvdResponse>; retriesPerformed: number }> {
-    const request = this.requestBuilder.buildFetchRequest(
-      options.since,
-      options.until,
-      options.startIndex
-    );
+    const request = this.requestBuilder.buildFetchRequest(options);
     return this.executeRequest(request, options.signal, options.operationName);
   }
 

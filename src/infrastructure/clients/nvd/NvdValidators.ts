@@ -62,6 +62,23 @@ export function validatePublishedDateRange(
   };
 }
 
+export function validateModifiedDateRange(
+  modifiedFrom: string | undefined,
+  modifiedUntil: string | undefined
+): NvdDateRange {
+  const safeModifiedFrom = modifiedFrom ? validateIsoUtcDate(modifiedFrom, 'lastModStartDate') : undefined;
+  const safeModifiedUntil = modifiedUntil ? validateIsoUtcDate(modifiedUntil, 'lastModEndDate') : undefined;
+
+  if (safeModifiedFrom && safeModifiedUntil && Date.parse(safeModifiedFrom) > Date.parse(safeModifiedUntil)) {
+    throw new Error('lastModStartDate must be less than or equal to lastModEndDate.');
+  }
+
+  return {
+    ...(safeModifiedFrom ? { modifiedFrom: safeModifiedFrom } : {}),
+    ...(safeModifiedUntil ? { modifiedUntil: safeModifiedUntil } : {})
+  };
+}
+
 export function validateStartIndex(startIndex: number): number {
   if (!Number.isInteger(startIndex)) {
     throw new Error('startIndex must be an integer.');
