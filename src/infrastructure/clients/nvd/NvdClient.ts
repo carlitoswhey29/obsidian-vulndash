@@ -5,7 +5,6 @@ import type { Vulnerability } from '../../../domain/entities/Vulnerability';
 import { ClientBase, type FeedSyncControls } from '../common/ClientBase';
 import type { ClientLogger } from '../common/ClientLogger';
 import type { RetryPolicy } from '../common/RetryPolicy';
-import { filterVulnerabilitiesByPublishedDateWindow } from '../../../application/dashboard/PublishedDateWindow';
 import type { NvdRequestParts, NvdResponse } from './NvdTypes';
 import { NvdMapper } from './NvdMapper';
 import { NvdRequestBuilder } from './NvdRequestBuilder';
@@ -25,11 +24,12 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
     public readonly name: string,
     private readonly apiKey: string,
     private readonly controls: FeedSyncControls,
+    dateFilterType: 'published' | 'modified' = 'modified',
     dependencies: NvdClientDependencies = {}
   ) {
     super(httpClient, name, controls, dependencies.logger, dependencies.retryPolicy);
     this.mapper = new NvdMapper(this.name);
-    this.requestBuilder = new NvdRequestBuilder(this.apiKey);
+    this.requestBuilder = new NvdRequestBuilder(this.apiKey, dateFilterType);
   }
 
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
@@ -49,15 +49,15 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
       }
       seenIndexes.add(startIndex);
 
+      // Using the conditional spread to satisfy strict exactOptionalPropertyTypes
       const { response, retriesPerformed: requestRetries } = await this.fetchPage({
         startIndex,
         ...(options.since ? { since: options.since } : {}),
         ...(options.until ? { until: options.until } : {}),
-        ...(options.publishedFrom ? { publishedFrom: options.publishedFrom } : {}),
-        ...(options.publishedUntil ? { publishedUntil: options.publishedUntil } : {}),
         signal: options.signal,
         operationName: 'fetchVulnerabilities'
       });
+
       retriesPerformed += requestRetries;
       pagesFetched += 1;
 
@@ -65,14 +65,8 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
         .map((item) => item.cve)
         .filter((cve): cve is NonNullable<typeof cve> => Boolean(cve?.id))
         .map((cve) => this.mapper.normalize(cve));
-      const filteredItems = options.publishedFrom || options.publishedUntil
-        ? filterVulnerabilitiesByPublishedDateWindow(items, {
-          from: options.publishedFrom ?? new Date(0).toISOString(),
-          to: options.publishedUntil ?? new Date(8640000000000000).toISOString()
-        })
-        : items;
 
-      for (const item of filteredItems) {
+      for (const item of items) {
         if (collected.length >= this.controls.maxItems) {
           warnings.push('max_items_reached');
           break;
@@ -118,19 +112,15 @@ export class NvdClient extends ClientBase implements VulnerabilityFeed {
       startIndex: number;
       since?: string;
       until?: string;
-      publishedFrom?: string;
-      publishedUntil?: string;
       signal: AbortSignal;
       operationName: string;
     }
   ): Promise<{ response: HttpResponse<NvdResponse>; retriesPerformed: number }> {
-    const request = this.requestBuilder.buildFetchRequest({
-      startIndex: options.startIndex,
-      ...(options.since ? { since: options.since } : {}),
-      ...(options.until ? { until: options.until } : {}),
-      ...(options.publishedFrom ? { publishedFrom: options.publishedFrom } : {}),
-      ...(options.publishedUntil ? { publishedUntil: options.publishedUntil } : {})
-    });
+    const request = this.requestBuilder.buildFetchRequest(
+      options.since,
+      options.until,
+      options.startIndex
+    );
     return this.executeRequest(request, options.signal, options.operationName);
   }
 

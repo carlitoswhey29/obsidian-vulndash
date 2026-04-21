@@ -9,18 +9,17 @@ import {
 import type { NvdRequestParts, NvdRequestQuery } from './NvdTypes';
 
 export class NvdRequestBuilder {
-  public constructor(private readonly apiKey?: string) {}
+  public constructor(
+    private readonly apiKey?: string,
+    private readonly dateFilterType: 'published' | 'modified' = 'modified'
+  ) {}
 
   public buildFetchRequest(
-    options: {
-      since?: string;
-      until?: string;
-      publishedFrom?: string;
-      publishedUntil?: string;
-      startIndex: number;
-    }
+    since: string | undefined,
+    until: string | undefined,
+    startIndex: number
   ): NvdRequestParts {
-    const safeQuery = this.buildFetchQuery(options);
+    const safeQuery = this.buildFetchQuery(since, until, startIndex);
 
     return {
       url: this.buildUrl(safeQuery),
@@ -35,16 +34,10 @@ export class NvdRequestBuilder {
     };
   }
 
-  private buildFetchQuery(options: {
-    since?: string;
-    until?: string;
-    publishedFrom?: string;
-    publishedUntil?: string;
-    startIndex: number;
-  }): NvdRequestQuery {
-    const safeStartIndex = validateStartIndex(options.startIndex);
-    const safeDateRange = validateDateRange(options.since, options.until);
-    const safePublishedDateRange = validatePublishedDateRange(options.publishedFrom, options.publishedUntil);
+  private buildFetchQuery(since?: string, until?: string, startIndex: number = 0): NvdRequestQuery {
+    const safeStartIndex = validateStartIndex(startIndex);
+    const safeDateRange = validateDateRange(since, until);
+    const safePublishedDateRange = validatePublishedDateRange(since, until);
 
     return {
       startIndex: safeStartIndex,
@@ -59,20 +52,16 @@ export class NvdRequestBuilder {
       startIndex: String(query.startIndex)
     });
 
+    // Select the appropriate NVD API parameter names
+    const startParam = this.dateFilterType === 'published' ? 'pubStartDate' : 'lastModStartDate';
+    const endParam = this.dateFilterType === 'published' ? 'pubEndDate' : 'lastModEndDate';
+
     if (query.since) {
-      params.set('lastModStartDate', query.since);
+      params.set(startParam, query.since);
     }
 
     if (query.until) {
-      params.set('lastModEndDate', query.until);
-    }
-
-    if (query.publishedFrom) {
-      params.set('pubStartDate', query.publishedFrom);
-    }
-
-    if (query.publishedUntil) {
-      params.set('pubEndDate', query.publishedUntil);
+      params.set(endParam, query.until);
     }
 
     return `${NVD_BASE_URL}?${params.toString()}`;

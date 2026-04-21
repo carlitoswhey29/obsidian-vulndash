@@ -20,7 +20,14 @@ export const buildFeedsFromConfig = (
 
     switch (config.type) {
       case 'nvd': {
-        feeds.push(new NvdClient(httpClient, config.id, config.name, config.apiKey ?? config.token ?? '', controls));
+        feeds.push(new NvdClient(
+          httpClient,
+          config.id,
+          config.name,
+          config.apiKey ?? config.token ?? '',
+          controls,
+          config.dateFilterType // Pass the setting here
+        ));
         break;
       }
       case 'github_advisory': {

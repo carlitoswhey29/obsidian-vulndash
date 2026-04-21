@@ -60,7 +60,7 @@ test('reuses fixed since/until window across NVD pages and advances via API meta
   assert.match(seenUrls[1] ?? '', /startIndex=2/);
 });
 
-test('accepts an explicit published date window for NVD fetches', async () => {
+test('accepts an explicit published date window for NVD fetches via constructor config', async () => {
   let seenUrl = '';
   const httpClient: IHttpClient = {
     async getJson(url) {
@@ -84,11 +84,12 @@ test('accepts an explicit published date window for NVD fetches', async () => {
     }
   };
 
-  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 });
+  // Configure the client specifically for 'published' date filtering
+  const client = new NvdClient(httpClient, 'nvd-default', 'NVD', '', { maxItems: 10, maxPages: 2 }, 'published');
   await client.fetchVulnerabilities({
     signal: new AbortController().signal,
-    publishedFrom: '2026-04-20T00:00:00.000Z',
-    publishedUntil: '2026-04-20T23:59:59.999Z'
+    since: '2026-04-20T00:00:00.000Z',
+    until: '2026-04-20T23:59:59.999Z'
   });
 
   assert.match(seenUrl, /pubStartDate=2026-04-20T00%3A00%3A00.000Z/);
@@ -489,6 +490,7 @@ test('sanitizes NVD apiKey headers before request logging', async () => {
     'NVD',
     'secret-key',
     { maxItems: 10, maxPages: 2 },
+    'modified', // Explicitly pass dateFilterType to shift logger to 7th argument
     { logger }
   );
   await client.fetchVulnerabilities({ signal: new AbortController().signal });
@@ -528,6 +530,7 @@ test('sanitizes NVD apiKey headers before validation request logging', async () 
     'NVD',
     'secret-key',
     { maxItems: 10, maxPages: 2 },
+    'modified', // Explicitly pass dateFilterType to shift logger to 7th argument
     { logger }
   );
   await client.validateConnection(new AbortController().signal);

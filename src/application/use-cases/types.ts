@@ -5,6 +5,8 @@ import type { TriageState } from '../../domain/triage/TriageState';
 
 export type DashboardSortOrder = 'publishedAt' | 'cvssScore';
 
+
+
 export interface ColumnVisibility {
   id: boolean;
   title: boolean;
@@ -53,6 +55,7 @@ interface FeedConfigBase {
 export interface NvdFeedConfig extends FeedConfigBase {
   type: 'nvd';
   apiKey?: string;
+  dateFilterType?: 'published' | 'modified';
 }
 
 export interface GitHubAdvisoryFeedConfig extends FeedConfigBase {
