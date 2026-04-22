@@ -2,9 +2,10 @@ import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import type { TriageRecord } from '../../domain/triage/TriageRecord';
 
 export const VULN_CACHE_DB_NAME = 'vulndash-cache';
-export const VULN_CACHE_DB_VERSION = 2;
+export const VULN_CACHE_DB_VERSION = 3;
 
 export const VULN_CACHE_STORES = {
+  componentQueries: 'componentQueries',
   databaseMetadata: 'database-metadata',
   syncMetadata: 'sync-metadata',
   triageRecords: 'triage-records',
@@ -30,6 +31,15 @@ export interface PersistedVulnerabilityRecord {
   readonly sourceId: string;
   readonly vulnerability: Vulnerability;
   readonly vulnerabilityId: string;
+}
+
+export interface PersistedComponentQueryRecord {
+  readonly purl: string;
+  readonly source: 'osv';
+  readonly lastQueriedAtMs: number;
+  readonly lastSeenInWorkspaceAtMs: number;
+  readonly resultState: 'hit' | 'miss' | 'error';
+  readonly vulnerabilityCacheKeys: readonly string[];
 }
 
 export interface PersistedTriageRecord {
@@ -185,7 +195,7 @@ export const comparePersistedRecordsForHardCap = (
 
 export const applyVulnCacheSchemaUpgrade = (
   database: IDBDatabase | SchemaDatabase,
-  _oldVersion: number,
+  oldVersion: number,
   _newVersion: number | null
 ): void => {
   const vulnerabilities = ensureStore(database as SchemaDatabase, VULN_CACHE_STORES.vulnerabilities, {
@@ -207,4 +217,10 @@ export const applyVulnCacheSchemaUpgrade = (
   });
   ensureIndex(triageRecords, VULN_CACHE_INDEXES.triageByState, 'state', { unique: false });
   ensureIndex(triageRecords, VULN_CACHE_INDEXES.triageByUpdatedAt, 'updatedAtMs', { unique: false });
+
+  if (oldVersion < 3 || !database.objectStoreNames.contains(VULN_CACHE_STORES.componentQueries)) {
+    ensureStore(database as SchemaDatabase, VULN_CACHE_STORES.componentQueries, {
+      keyPath: 'purl'
+    });
+  }
 };
