@@ -25,7 +25,17 @@ test('builds only enabled feeds and skips invalid config entries', () => {
     { id: 'nvd-default', name: 'NVD', type: 'nvd', enabled: true, apiKey: 'k' },
     { id: 'github-default', name: 'GitHub', type: 'github_advisory', enabled: false, token: 'x' },
     { id: 'repo-feed', name: 'Repo feed', type: 'github_repo', enabled: true, repoPath: 'Owner/Repo', token: 'x' },
-    { id: 'generic-invalid', name: 'Custom', type: 'generic_json', enabled: true, url: '   ' }
+    { id: 'generic-invalid', name: 'Custom', type: 'generic_json', enabled: true, url: '   ' },
+    {
+      id: 'osv-default',
+      name: 'OSV',
+      type: 'osv',
+      enabled: true,
+      cacheTtlMs: 21_600_000,
+      negativeCacheTtlMs: 3_600_000,
+      requestTimeoutMs: 15_000,
+      maxConcurrentBatches: 4
+    }
   ];
 
   const feeds = buildFeedsFromConfig(configs, httpClient, controls);

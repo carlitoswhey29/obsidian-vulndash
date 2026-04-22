@@ -37,6 +37,7 @@ import type {
   ImportedSbomConfig,
   CacheStorageSettings,
   DailyRollupSettings,
+  OsvFeedConfig,
   ResolvedSbomComponent,
   RuntimeSbomState,
   SbomComponentOverride,
@@ -103,8 +104,20 @@ const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
 
 const DEFAULT_FEEDS: FeedConfig[] = [
   { id: 'nvd-default', name: 'NVD', type: 'nvd', enabled: true, dateFilterType: 'modified' },
-  { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true }
+  { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true },
+  {
+    id: 'osv-default',
+    name: 'OSV',
+    type: 'osv',
+    enabled: false,
+    cacheTtlMs: 6 * 60 * 60 * 1000,
+    negativeCacheTtlMs: 60 * 60 * 1000,
+    requestTimeoutMs: 15_000,
+    maxConcurrentBatches: 4
+  }
 ];
+
+const MAX_OSV_CONCURRENT_BATCHES = 8;
 
 const DEFAULT_CACHE_STORAGE: CacheStorageSettings = {
   hardCap: 5000,
@@ -175,11 +188,43 @@ const componentPreferenceService = new ComponentPreferenceService();
 
 const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
 
+const normalizePositiveInteger = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+
+const normalizeBoundedPositiveInteger = (value: unknown, fallback: number, maximum: number): number =>
+  Math.min(normalizePositiveInteger(value, fallback), maximum);
+
+const getDefaultOsvFeedConfig = (): OsvFeedConfig => {
+  const defaultFeed = DEFAULT_FEEDS.find((feed): feed is OsvFeedConfig => feed.type === 'osv');
+  if (!defaultFeed) {
+    throw new Error('Missing default OSV feed configuration.');
+  }
+
+  return defaultFeed;
+};
+
 const normalizeFeedConfigs = (feeds: FeedConfig[] | undefined): FeedConfig[] => (feeds ?? []).map((feed) => {
   if (feed.type === 'nvd') {
     return {
       ...feed,
       dateFilterType: feed.dateFilterType === 'published' ? 'published' : 'modified'
+    };
+  }
+
+  if (feed.type === 'osv') {
+    const defaults = getDefaultOsvFeedConfig();
+    return {
+      ...feed,
+      cacheTtlMs: normalizePositiveInteger(feed.cacheTtlMs, defaults.cacheTtlMs),
+      negativeCacheTtlMs: normalizePositiveInteger(feed.negativeCacheTtlMs, defaults.negativeCacheTtlMs),
+      requestTimeoutMs: normalizePositiveInteger(feed.requestTimeoutMs, defaults.requestTimeoutMs),
+      maxConcurrentBatches: normalizeBoundedPositiveInteger(
+        feed.maxConcurrentBatches,
+        defaults.maxConcurrentBatches,
+        MAX_OSV_CONCURRENT_BATCHES
+      )
     };
   }
 
