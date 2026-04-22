@@ -952,6 +952,13 @@ export default class VulnDashPlugin extends Plugin {
     return this.componentPreferenceService.applyPreferences(catalog, this.settings);
   }
 
+  public async getActiveWorkspacePurls(): Promise<readonly string[]> {
+    const catalog = await this.getSbomCatalog();
+    return catalog.components
+      .filter((component) => component.isEnabled && typeof component.purl === 'string' && component.purl.trim().length > 0)
+      .map((component) => component.purl as string);
+  }
+
   public async getComponentInventorySnapshot(): Promise<ComponentInventorySnapshot> {
     const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
     return this.componentInventoryService.buildSnapshot(this.settings, loadResults);
@@ -1450,7 +1457,10 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     const client = new HttpClient();
-    const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls);
+    const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls, {
+      ...(this.persistentCacheServices ? { osvQueryCache: this.persistentCacheServices.cacheRepository } : {}),
+      getOsvPurls: async () => this.getActiveWorkspacePurls()
+    });
     const generation = this.syncServiceGeneration;
     const syncService = new VulnerabilitySyncService({
       controls: this.settings.syncControls,

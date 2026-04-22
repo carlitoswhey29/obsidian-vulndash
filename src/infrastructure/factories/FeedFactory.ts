@@ -5,11 +5,19 @@ import { GitHubAdvisoryClient } from '../clients/github/GitHubAdvisoryClient';
 import { GitHubRepoClient } from '../clients/github/GitHubRepoClient';
 import { GenericJsonFeedClient } from '../clients/generic/GenericJsonFeedClient';
 import { NvdClient } from '../clients/nvd/NvdClient';
+import { OsvFeedClient } from '../clients/osv/OsvFeedClient';
+import type { IOsvQueryCache } from '../clients/osv/IOsvQueryCache';
+
+export interface FeedFactoryDependencies {
+  readonly getOsvPurls?: () => Promise<readonly string[]>;
+  readonly osvQueryCache?: IOsvQueryCache;
+}
 
 export const buildFeedsFromConfig = (
   configs: FeedConfig[],
   httpClient: IHttpClient,
-  controls: SyncControls
+  controls: SyncControls,
+  dependencies: FeedFactoryDependencies = {}
 ): VulnerabilityFeed[] => {
   const feeds: VulnerabilityFeed[] = [];
 
@@ -61,7 +69,18 @@ export const buildFeedsFromConfig = (
         break;
       }
       case 'osv': {
-        console.warn('[vulndash.feed.unimplemented]', { id: config.id, type: config.type });
+        if (!dependencies.osvQueryCache || !dependencies.getOsvPurls) {
+          console.warn('[vulndash.feed.invalid]', { id: config.id, type: config.type, reason: 'missing_osv_dependencies' });
+          break;
+        }
+
+        feeds.push(new OsvFeedClient(
+          httpClient,
+          dependencies.osvQueryCache,
+          dependencies.getOsvPurls,
+          controls,
+          config
+        ));
         break;
       }
       default: {

@@ -28,6 +28,14 @@ interface ResilientGetJsonRequest {
   decorateError?: (error: unknown) => unknown;
 }
 
+interface ResilientPostJsonRequest<TRequest> {
+  body: TRequest;
+  context: Omit<ClientRequestContext, 'headers' | 'attempt'>;
+  headers: Record<string, string>;
+  signal: AbortSignal;
+  decorateError?: (error: unknown) => unknown;
+}
+
 const DEFAULT_CLIENT_LOGGER = new NoopClientLogger();
 
 const createRetryPolicyFromControls = (controls: FeedSyncControls | undefined): RetryPolicy =>
@@ -84,6 +92,22 @@ export abstract class ClientBase {
     retriesPerformed: number;
   }> {
     return this.executeJsonRequest<T>({
+      method: 'GET',
+      context: request.context,
+      url: request.context.url,
+      headers: request.headers,
+      signal: request.signal,
+      ...(request.decorateError ? { decorateError: request.decorateError } : {})
+    });
+  }
+
+  protected async postJsonWithResilience<TRequest, TResponse>(request: ResilientPostJsonRequest<TRequest>): Promise<{
+    response: HttpResponse<TResponse>;
+    retriesPerformed: number;
+  }> {
+    return this.executeJsonRequest<TResponse, TRequest>({
+      method: 'POST',
+      body: request.body,
       context: request.context,
       url: request.context.url,
       headers: request.headers,
@@ -108,13 +132,15 @@ export abstract class ClientBase {
     });
   }
 
-  private async executeJsonRequest<T>(request: {
+  private async executeJsonRequest<TResponse, TRequest = never>(request: {
+    method: 'GET' | 'POST';
+    body?: TRequest;
     context: Omit<ClientRequestContext, 'headers' | 'attempt'>;
     url: string;
     headers: Record<string, string>;
     signal: AbortSignal;
     decorateError?: (error: unknown) => unknown;
-  }): Promise<{ response: HttpResponse<T>; retriesPerformed: number }> {
+  }): Promise<{ response: HttpResponse<TResponse>; retriesPerformed: number }> {
     const sanitizedHeaders = sanitizeHeadersForLogs(request.headers);
     const baseContext: Omit<ClientRequestContext, 'attempt'> = {
       provider: request.context.provider,
@@ -124,7 +150,7 @@ export abstract class ClientBase {
     };
 
     let lastAttempt = 1;
-    const response = await this.retryExecutor.execute<HttpResponse<T>>(async (attempt) => {
+    const response = await this.retryExecutor.execute<HttpResponse<TResponse>>(async (attempt) => {
       lastAttempt = attempt;
       const attemptContext: ClientRequestContext = {
         ...baseContext,
@@ -134,7 +160,9 @@ export abstract class ClientBase {
       this.logger.onRequestStart(attemptContext);
 
       try {
-        const result = await this.httpClient.getJson<T>(request.url, request.headers, request.signal);
+        const result = request.method === 'POST'
+          ? await this.executePostJson<TRequest, TResponse>(request)
+          : await this.httpClient.getJson<TResponse>(request.url, request.headers, request.signal);
         this.logger.onRequestSuccess({
           ...attemptContext,
           status: result.status
@@ -149,5 +177,23 @@ export abstract class ClientBase {
       response,
       retriesPerformed: Math.max(0, lastAttempt - 1)
     };
+  }
+
+  private async executePostJson<TRequest, TResponse>(request: {
+    body?: TRequest;
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    url: string;
+  }): Promise<HttpResponse<TResponse>> {
+    if (!this.httpClient.postJson) {
+      throw new Error('HTTP client does not support JSON POST requests.');
+    }
+
+    return this.httpClient.postJson<TRequest, TResponse>(
+      request.url,
+      request.body as TRequest,
+      request.headers,
+      request.signal
+    );
   }
 }
