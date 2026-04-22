@@ -196,23 +196,31 @@ test('pruneOrphanedComponentQueries removes only inactive PURLs', async () => {
 test('pruneExpiredComponentQueries removes only stale records', async () => {
   const repository = createRepository();
   const stale = createComponentQueryRecord('pkg:npm/stale@1.0.0', {
-    lastQueriedAtMs: 99
+    lastQueriedAtMs: 99,
+    lastSeenInWorkspaceAtMs: 99
   });
   const boundary = createComponentQueryRecord('pkg:npm/boundary@1.0.0', {
-    lastQueriedAtMs: 100
+    lastQueriedAtMs: 100,
+    lastSeenInWorkspaceAtMs: 100
   });
   const fresh = createComponentQueryRecord('pkg:npm/fresh@1.0.0', {
-    lastQueriedAtMs: 101
+    lastQueriedAtMs: 101,
+    lastSeenInWorkspaceAtMs: 101
+  });
+  const activeButUnqueriedRecently = createComponentQueryRecord('pkg:npm/active@1.0.0', {
+    lastQueriedAtMs: 10,
+    lastSeenInWorkspaceAtMs: 500
   });
 
-  await repository.saveComponentQueries([stale, boundary, fresh]);
+  await repository.saveComponentQueries([stale, boundary, fresh, activeButUnqueriedRecently]);
   const deleted = await repository.pruneExpiredComponentQueries(100);
-  const loaded = await repository.loadComponentQueries([stale.purl, boundary.purl, fresh.purl]);
+  const loaded = await repository.loadComponentQueries([stale.purl, boundary.purl, fresh.purl, activeButUnqueriedRecently.purl]);
 
   assert.equal(deleted, 1);
   assert.equal(loaded.has(stale.purl), false);
   assert.equal(loaded.has(boundary.purl), true);
   assert.equal(loaded.has(fresh.purl), true);
+  assert.equal(loaded.has(activeButUnqueriedRecently.purl), true);
 });
 
 test('loadVulnerabilitiesByCacheKeys rehydrates persisted vulnerabilities by composite cache key', async () => {

@@ -353,14 +353,101 @@ test('failed requests do not create false miss records', async () => {
   ]);
   const client = createClient(httpClient, queryCache, async () => ['pkg:npm/a@1.0.0']);
 
-  await assert.rejects(
-    () => client.fetchVulnerabilities({ signal: new AbortController().signal }),
-    /OSV snapshot query failed/
-  );
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
 
   assert.equal(queryCache.savedRecords.length, 1);
   assert.equal(queryCache.savedRecords[0]?.resultState, 'error');
   assert.equal(queryCache.savedRecords[0]?.vulnerabilityCacheKeys.length, 0);
+  assert.deepEqual(result.vulnerabilities, []);
+  assert.deepEqual(result.warnings, ['partial_failure']);
+});
+
+test('partial failure preserves successful results', async () => {
+  const queryCache = new FakeOsvQueryCache();
+  const cachedFallbackKey = buildOsvVulnerabilityCacheKey('OSV-2026-10', 'osv-default');
+  queryCache.setComponentQueries([
+    createQueryRecord('pkg:npm/a@1.0.0', {
+      lastQueriedAtMs: 0,
+      lastSeenInWorkspaceAtMs: 0,
+      resultState: 'hit',
+      vulnerabilityCacheKeys: [cachedFallbackKey]
+    })
+  ]);
+  queryCache.setVulnerabilities({
+    [cachedFallbackKey]: createDomainVulnerability('OSV-2026-10')
+  });
+  const httpClient = new FakeHttpClient([
+    async () => ({
+      status: 200,
+      headers: {},
+      data: {
+        results: [
+          {
+            vulns: [createVulnerabilityPayload('OSV-2026-11')],
+            next_page_token: 'token-a'
+          },
+          {
+            vulns: [createVulnerabilityPayload('OSV-2026-12')]
+          }
+        ]
+      }
+    }),
+    async () => {
+      throw new RetryableNetworkError('boom', { url: 'https://api.osv.dev/v1/querybatch' });
+    }
+  ]);
+  const client = createClient(httpClient, queryCache, async () => [
+    'pkg:npm/a@1.0.0',
+    'pkg:npm/b@1.0.0'
+  ]);
+
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.deepEqual(result.vulnerabilities.map((vulnerability) => vulnerability.id), ['OSV-2026-10', 'OSV-2026-12']);
+  assert.deepEqual(result.warnings, ['partial_failure']);
+  assert.equal(queryCache.savedRecords.some((record) => record.purl === 'pkg:npm/b@1.0.0' && record.resultState === 'hit'), true);
+  assert.equal(queryCache.savedRecords.some((record) => record.purl === 'pkg:npm/a@1.0.0' && record.resultState === 'error'), true);
+});
+
+test('observability changes do not change functional behavior', async () => {
+  const queryCache = new FakeOsvQueryCache();
+  const httpClient = new FakeHttpClient([
+    async () => ({
+      status: 200,
+      headers: {},
+      data: {
+        results: [
+          {
+            vulns: [createVulnerabilityPayload('OSV-2026-13')]
+          }
+        ]
+      }
+    })
+  ]);
+  const client = createClient(httpClient, queryCache, async () => ['pkg:npm/a@1.0.0']);
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const infoCalls: unknown[][] = [];
+  const warnCalls: unknown[][] = [];
+
+  console.info = (...args: unknown[]): void => {
+    infoCalls.push(args);
+  };
+  console.warn = (...args: unknown[]): void => {
+    warnCalls.push(args);
+  };
+
+  try {
+    const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+    assert.deepEqual(result.vulnerabilities.map((vulnerability) => vulnerability.id), ['OSV-2026-13']);
+    assert.equal(result.warnings.length, 0);
+    assert.equal(infoCalls.length >= 2, true);
+    assert.equal(warnCalls.length, 0);
+  } finally {
+    console.info = originalInfo;
+    console.warn = originalWarn;
+  }
 });
 
 test('per-query pagination is handled correctly', async () => {

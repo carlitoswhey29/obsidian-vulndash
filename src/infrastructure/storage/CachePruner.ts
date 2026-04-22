@@ -3,6 +3,8 @@ import { VulnCacheRepository } from './VulnCacheRepository';
 import type { CacheRetentionSettings } from './VulnCacheSchema';
 
 export interface CachePruneResult {
+  readonly componentQueryExpiredCount: number;
+  readonly componentQueryOrphanedCount: number;
   readonly expiredCount: number;
   readonly overCapCount: number;
 }
@@ -12,7 +14,8 @@ export class CachePruner {
 
   public constructor(
     private readonly repository: VulnCacheRepository,
-    private readonly scheduler = new CooperativeScheduler()
+    private readonly scheduler = new CooperativeScheduler(),
+    private readonly getActivePurls?: () => Promise<readonly string[]>
   ) {}
 
   public schedule(policy: CacheRetentionSettings): void {
@@ -24,7 +27,8 @@ export class CachePruner {
     const run = async (): Promise<void> => {
       try {
         await this.scheduler.yieldToHost({ timeoutMs: 50 });
-        await this.pruneNow(policy);
+        const result = await this.pruneNow(policy);
+        console.info('[vulndash.cache.prune.complete]', result);
       } catch (error) {
         console.warn('[vulndash.cache.prune_failed]', error);
       } finally {
@@ -36,12 +40,43 @@ export class CachePruner {
   }
 
   public async pruneNow(policy: CacheRetentionSettings): Promise<CachePruneResult> {
-    const expiredCount = await this.repository.pruneExpired(Date.now() - policy.ttlMs, policy.pruneBatchSize);
+    const nowMs = Date.now();
+    const activePurls = this.toOrderedUniqueStrings(await this.getActivePurls?.() ?? []);
+    const activePurlSet = new Set(activePurls);
+
+    if (activePurls.length > 0) {
+      await this.repository.markComponentQueriesSeen(activePurls, nowMs);
+    }
+
+    const componentQueryOrphanedCount = activePurls.length > 0
+      ? await this.repository.pruneOrphanedComponentQueries(activePurlSet)
+      : 0;
+    const componentQueryExpiredCount = await this.repository.pruneExpiredComponentQueries(nowMs - policy.ttlMs);
+    const expiredCount = await this.repository.pruneExpired(nowMs - policy.ttlMs, policy.pruneBatchSize);
     const overCapCount = await this.repository.pruneToHardCap(policy.hardCap, policy.pruneBatchSize);
 
     return {
+      componentQueryExpiredCount,
+      componentQueryOrphanedCount,
       expiredCount,
       overCapCount
     };
+  }
+
+  private toOrderedUniqueStrings(values: readonly string[]): string[] {
+    const normalizedValues: string[] = [];
+    const seen = new Set<string>();
+
+    for (const value of values) {
+      const normalized = value.trim();
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+
+      seen.add(normalized);
+      normalizedValues.push(normalized);
+    }
+
+    return normalizedValues;
   }
 }
