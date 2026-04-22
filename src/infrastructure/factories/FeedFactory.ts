@@ -9,7 +9,7 @@ import { OsvFeedClient } from '../clients/osv/OsvFeedClient';
 import type { IOsvQueryCache } from '../clients/osv/IOsvQueryCache';
 
 export interface FeedFactoryDependencies {
-  readonly getOsvPurls?: () => Promise<readonly string[]>;
+  readonly getPurls?: () => Promise<readonly string[]>;
   readonly osvQueryCache?: IOsvQueryCache;
 }
 
@@ -69,7 +69,7 @@ export const buildFeedsFromConfig = (
         break;
       }
       case 'osv': {
-        if (!dependencies.osvQueryCache || !dependencies.getOsvPurls) {
+        if (!dependencies.osvQueryCache || !dependencies.getPurls) {
           console.warn('[vulndash.feed.invalid]', { id: config.id, type: config.type, reason: 'missing_osv_dependencies' });
           break;
         }
@@ -77,7 +77,7 @@ export const buildFeedsFromConfig = (
         feeds.push(new OsvFeedClient(
           httpClient,
           dependencies.osvQueryCache,
-          dependencies.getOsvPurls,
+          dependencies.getPurls,
           controls,
           config
         ));
