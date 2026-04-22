@@ -53,7 +53,7 @@ class FakeDatabase {
 test('schema upgrade creates vulnerability, triage, and sync metadata stores with required indexes', () => {
   const database = new FakeDatabase();
 
-  applyVulnCacheSchemaUpgrade(database as unknown as IDBDatabase, 0, 2);
+  applyVulnCacheSchemaUpgrade(database as unknown as IDBDatabase, 0, 3);
 
   const vulnerabilities = database.getStore(VULN_CACHE_STORES.vulnerabilities);
   assert.ok(vulnerabilities);
@@ -68,4 +68,21 @@ test('schema upgrade creates vulnerability, triage, and sync metadata stores wit
   assert.equal(triageRecords?.indexNames.contains(VULN_CACHE_INDEXES.triageByUpdatedAt), true);
   assert.ok(database.getStore(VULN_CACHE_STORES.syncMetadata));
   assert.ok(database.getStore(VULN_CACHE_STORES.databaseMetadata));
+  const componentQueries = database.getStore(VULN_CACHE_STORES.componentQueries);
+  assert.ok(componentQueries);
+  assert.equal(componentQueries?.keyPath, 'purl');
+});
+
+test('schema upgrade from version 2 adds the componentQueries store', () => {
+  const database = new FakeDatabase();
+  database.createObjectStore(VULN_CACHE_STORES.vulnerabilities, { keyPath: 'cacheKey' });
+  database.createObjectStore(VULN_CACHE_STORES.syncMetadata, { keyPath: 'sourceId' });
+  database.createObjectStore(VULN_CACHE_STORES.databaseMetadata, { keyPath: 'key' });
+  database.createObjectStore(VULN_CACHE_STORES.triageRecords, { keyPath: 'correlationKey' });
+
+  applyVulnCacheSchemaUpgrade(database as unknown as IDBDatabase, 2, 3);
+
+  const componentQueries = database.getStore(VULN_CACHE_STORES.componentQueries);
+  assert.ok(componentQueries);
+  assert.equal(componentQueries?.keyPath, 'purl');
 });
