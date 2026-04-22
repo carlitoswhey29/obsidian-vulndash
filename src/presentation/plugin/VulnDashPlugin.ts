@@ -1599,7 +1599,11 @@ export default class VulnDashPlugin extends Plugin {
       const metadataRepository = new SyncMetadataRepository(cacheDb);
       const triageRepository = new IndexedDbTriageRepository(cacheDb);
       const cacheHydrator = new CacheHydrator(cacheRepository, this.storageScheduler);
-      const cachePruner = new CachePruner(cacheRepository, this.storageScheduler);
+      const cachePruner = new CachePruner(
+        cacheRepository,
+        this.storageScheduler,
+        async () => this.getActiveWorkspacePurls()
+      );
       this.persistentCacheServices = {
         cacheDb,
         cacheHydrator,

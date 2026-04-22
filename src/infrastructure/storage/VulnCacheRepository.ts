@@ -268,7 +268,7 @@ export class VulnCacheRepository implements IOsvQueryCache {
   public async pruneExpiredComponentQueries(cutoffMs: number): Promise<number> {
     const records = await this.listComponentQueryRecords();
     const purlsToDelete = records
-      .filter((record) => record.lastQueriedAtMs < cutoffMs)
+      .filter((record) => Math.max(record.lastQueriedAtMs, record.lastSeenInWorkspaceAtMs) < cutoffMs)
       .map((record) => record.purl);
 
     if (purlsToDelete.length === 0) {

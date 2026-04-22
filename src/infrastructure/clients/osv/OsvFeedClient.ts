@@ -36,6 +36,9 @@ interface CachedQueryClassification {
 
 interface BatchChunkResult {
   readonly failedPurls: readonly string[];
+  readonly continuationCount: number;
+  readonly maxPagesReached: boolean;
+  readonly mappedVulnerabilityCount: number;
   readonly pagesFetched: number;
   readonly resultsByPurl: ReadonlyMap<string, readonly Vulnerability[]>;
   readonly retriesPerformed: number;
@@ -51,6 +54,19 @@ interface TimedSignal {
   readonly signal: AbortSignal;
 }
 
+interface BatchResponseAssociation {
+  readonly continuationCount: number;
+  readonly failedPurls: readonly string[];
+  readonly nextPending: readonly PendingQuery[];
+}
+
+interface CacheClassificationSummary {
+  readonly cacheErrorStateCount: number;
+  readonly cacheHitCount: number;
+  readonly cacheMissCount: number;
+  readonly cacheStaleCount: number;
+}
+
 export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
   public readonly id: string;
   public readonly name: string;
@@ -61,7 +77,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     httpClient: IHttpClient,
     private readonly queryCache: IOsvQueryCache,
     private readonly getPurls: () => Promise<readonly string[]>,
-    controls: FeedSyncControls,
+    private readonly controls: FeedSyncControls,
     private readonly config: OsvFeedConfig
   ) {
     super(httpClient, config.name, controls);
@@ -73,7 +89,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
   public async fetchVulnerabilities(options: FetchVulnerabilityOptions): Promise<FetchVulnerabilityResult> {
     const warnings: string[] = [];
     const seenAtMs = Date.now();
-    const { ignoredCount, purls } = await this.loadNormalizedActivePurls();
+    const { ignoredCount, purls, rawCount } = await this.loadNormalizedActivePurls();
     const activePurls = purls;
     const activePurlSet = new Set(activePurls);
 
@@ -81,13 +97,34 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
       warnings.push('ignored_invalid_purls');
     }
 
-    await this.queryCache.pruneOrphanedComponentQueries(activePurlSet);
-    await this.queryCache.pruneExpiredComponentQueries(
+    await this.queryCache.markComponentQueriesSeen(activePurls, seenAtMs);
+    const orphanPrunedCount = await this.queryCache.pruneOrphanedComponentQueries(activePurlSet);
+    const expiredPrunedCount = await this.queryCache.pruneExpiredComponentQueries(
       seenAtMs - Math.max(this.config.cacheTtlMs, this.config.negativeCacheTtlMs)
     );
-    await this.queryCache.markComponentQueriesSeen(activePurls, seenAtMs);
 
     if (activePurls.length === 0) {
+      this.logFetchPlan({
+        cacheErrorStateCount: 0,
+        cacheHitCount: 0,
+        cacheMissCount: 0,
+        cacheStaleCount: 0,
+        expiredPrunedCount,
+        normalizedValidPurlCount: 0,
+        orphanPrunedCount,
+        rawActivePurlCount: rawCount
+      });
+      this.logFetchComplete({
+        batchCount: 0,
+        continuationCount: 0,
+        mappedVulnerabilityCount: 0,
+        partialFailureCount: 0,
+        pruneExpiredCount: expiredPrunedCount,
+        pruneOrphanedCount: orphanPrunedCount,
+        retriesPerformed: 0,
+        returnedVulnerabilityCount: 0,
+        warnings
+      });
       return {
         vulnerabilities: [],
         pagesFetched: 0,
@@ -98,6 +135,14 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
 
     const recordsByPurl = await this.queryCache.loadComponentQueries(activePurls);
     const classifications = activePurls.map((purl) => this.evaluateFreshness(purl, recordsByPurl.get(purl), seenAtMs));
+    const classificationSummary = this.summarizeClassifications(classifications);
+    this.logFetchPlan({
+      ...classificationSummary,
+      expiredPrunedCount,
+      normalizedValidPurlCount: activePurls.length,
+      orphanPrunedCount,
+      rawActivePurlCount: rawCount
+    });
     const freshPositiveRecords = classifications
       .filter((classification): classification is CachedQueryClassification & { record: PersistedComponentQueryRecord } =>
         classification.freshness === 'fresh-positive' && Boolean(classification.record))
@@ -112,19 +157,48 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
 
     const queryResult = await this.fetchQueriedPurls(purlsToQuery, options.signal);
     const queriedAtMs = Date.now();
-
+    if (queryResult.maxPagesReached) {
+      warnings.push('max_pages_reached');
+    }
     if (queryResult.failedPurls.length > 0) {
-      await this.queryCache.saveComponentQueries(this.buildErrorQueryRecords(queryResult.failedPurls, queriedAtMs, seenAtMs));
-      throw new Error(`OSV snapshot query failed for ${queryResult.failedPurls.length} active PURLs.`);
+      warnings.push('partial_failure');
     }
 
-    const queryRecords = this.buildSuccessfulQueryRecords(queryResult.resultsByPurl, queriedAtMs, seenAtMs);
+    const fallbackRecords = this.selectFailedFallbackRecords(queryResult.failedPurls, recordsByPurl);
+    const fallbackVulnerabilities = await this.rehydrateCachedVulnerabilities(fallbackRecords);
+    const queryRecords = [
+      ...this.buildSuccessfulQueryRecords(queryResult.resultsByPurl, queriedAtMs, seenAtMs),
+      ...this.buildErrorQueryRecords(queryResult.failedPurls, recordsByPurl, queriedAtMs, seenAtMs)
+    ];
     if (queryRecords.length > 0) {
       await this.queryCache.saveComponentQueries(queryRecords);
     }
 
     const queriedVulnerabilities = Array.from(queryResult.resultsByPurl.values()).flatMap((vulnerabilities) => vulnerabilities);
-    const vulnerabilities = Array.from(this.dedupeVulnerabilities([...cachedVulnerabilities, ...queriedVulnerabilities]));
+    const vulnerabilities = Array.from(this.dedupeVulnerabilities([
+      ...cachedVulnerabilities,
+      ...fallbackVulnerabilities,
+      ...queriedVulnerabilities
+    ]));
+    this.logFetchComplete({
+      batchCount: queryResult.pagesFetched,
+      continuationCount: queryResult.continuationCount,
+      mappedVulnerabilityCount: queryResult.mappedVulnerabilityCount,
+      partialFailureCount: queryResult.failedPurls.length,
+      pruneExpiredCount: expiredPrunedCount,
+      pruneOrphanedCount: orphanPrunedCount,
+      retriesPerformed: queryResult.retriesPerformed,
+      returnedVulnerabilityCount: vulnerabilities.length,
+      warnings
+    });
+    if (queryResult.failedPurls.length > 0) {
+      console.warn('[vulndash.osv.fetch.partial_failure]', {
+        source: this.name,
+        feedId: this.id,
+        partialFailureCount: queryResult.failedPurls.length,
+        batchCount: queryResult.pagesFetched
+      });
+    }
 
     return {
       vulnerabilities,
@@ -134,7 +208,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     };
   }
 
-  private async loadNormalizedActivePurls(): Promise<{ ignoredCount: number; purls: readonly string[] }> {
+  private async loadNormalizedActivePurls(): Promise<{ ignoredCount: number; purls: readonly string[]; rawCount: number }> {
     const rawPurls = await this.getPurls();
     const normalizedPurls: string[] = [];
     const seen = new Set<string>();
@@ -159,7 +233,8 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
 
     return {
       ignoredCount,
-      purls: normalizedPurls
+      purls: normalizedPurls,
+      rawCount: rawPurls.length
     };
   }
 
@@ -228,25 +303,46 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     purls: readonly string[],
     signal: AbortSignal
   ): Promise<{
+    continuationCount: number;
     failedPurls: readonly string[];
+    mappedVulnerabilityCount: number;
+    maxPagesReached: boolean;
     pagesFetched: number;
     resultsByPurl: ReadonlyMap<string, readonly Vulnerability[]>;
     retriesPerformed: number;
   }> {
+    if (purls.length === 0) {
+      return {
+        continuationCount: 0,
+        failedPurls: [],
+        mappedVulnerabilityCount: 0,
+        maxPagesReached: false,
+        pagesFetched: 0,
+        resultsByPurl: new Map<string, readonly Vulnerability[]>(),
+        retriesPerformed: 0
+      };
+    }
+
     const chunks = this.chunkPurls(purls, MAX_OSV_BATCH_SIZE);
     const chunkResults = await this.processWithConcurrency(chunks, this.config.maxConcurrentBatches, async (chunk) =>
       this.fetchChunk(chunk, signal)
     );
 
+    let continuationCount = 0;
     const failedPurls: string[] = [];
+    let mappedVulnerabilityCount = 0;
+    let maxPagesReached = false;
     const resultsByPurl = new Map<string, readonly Vulnerability[]>();
     let pagesFetched = 0;
     let retriesPerformed = 0;
 
     for (const chunkResult of chunkResults) {
+      continuationCount += chunkResult.continuationCount;
       pagesFetched += chunkResult.pagesFetched;
       retriesPerformed += chunkResult.retriesPerformed;
       failedPurls.push(...chunkResult.failedPurls);
+      mappedVulnerabilityCount += chunkResult.mappedVulnerabilityCount;
+      maxPagesReached = maxPagesReached || chunkResult.maxPagesReached;
 
       for (const [purl, vulnerabilities] of chunkResult.resultsByPurl) {
         resultsByPurl.set(purl, vulnerabilities);
@@ -254,7 +350,10 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     }
 
     return {
-      failedPurls,
+      continuationCount,
+      failedPurls: Array.from(new Set(failedPurls)).sort((left, right) => left.localeCompare(right)),
+      mappedVulnerabilityCount,
+      maxPagesReached,
       pagesFetched,
       resultsByPurl,
       retriesPerformed
@@ -273,25 +372,37 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
 
   private async fetchChunk(purls: readonly string[], signal: AbortSignal): Promise<BatchChunkResult> {
     const accumulated = new Map<string, OsvVulnerabilityPayload[]>();
+    const failedPurls = new Set<string>();
+    let continuationCount = 0;
     let pending: PendingQuery[] = purls.map((purl) => ({ pageToken: undefined, purl }));
+    let maxPagesReached = false;
     let pagesFetched = 0;
     let retriesPerformed = 0;
 
-    while (pending.length > 0) {
+    while (pending.length > 0 && pagesFetched < this.controls.maxPages) {
       const requestItems = pending.map((query) => this.toBatchQueryItem(query.purl, query.pageToken));
 
       try {
         const { response, retriesPerformed: requestRetries } = await this.executeBatchQuery(requestItems, signal);
         pagesFetched += 1;
         retriesPerformed += requestRetries;
-        pending = this.associateBatchResponse(pending, response, accumulated);
+        const association = this.associateBatchResponse(pending, response, accumulated);
+        continuationCount += association.continuationCount;
+        for (const purl of association.failedPurls) {
+          failedPurls.add(purl);
+        }
+        pending = [...association.nextPending];
       } catch {
         for (const query of pending) {
           accumulated.delete(query.purl);
+          failedPurls.add(query.purl);
         }
 
         return {
-          failedPurls: pending.map((query) => query.purl),
+          continuationCount,
+          failedPurls: Array.from(failedPurls).sort((left, right) => left.localeCompare(right)),
+          mappedVulnerabilityCount: this.countMappedVulnerabilities(accumulated),
+          maxPagesReached,
           pagesFetched,
           resultsByPurl: this.mapAccumulatedPayloads(accumulated),
           retriesPerformed
@@ -299,8 +410,19 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
       }
     }
 
+    if (pending.length > 0) {
+      maxPagesReached = true;
+      for (const query of pending) {
+        accumulated.delete(query.purl);
+        failedPurls.add(query.purl);
+      }
+    }
+
     return {
-      failedPurls: [],
+      continuationCount,
+      failedPurls: Array.from(failedPurls).sort((left, right) => left.localeCompare(right)),
+      mappedVulnerabilityCount: this.countMappedVulnerabilities(accumulated),
+      maxPagesReached,
       pagesFetched,
       resultsByPurl: this.mapAccumulatedPayloads(accumulated),
       retriesPerformed
@@ -360,7 +482,9 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     pending: readonly PendingQuery[],
     response: HttpResponse<OsvBatchResponse>,
     accumulated: Map<string, OsvVulnerabilityPayload[]>
-  ): PendingQuery[] {
+  ): BatchResponseAssociation {
+    let continuationCount = 0;
+    const failedPurls: string[] = [];
     const nextPending: PendingQuery[] = [];
 
     for (let index = 0; index < pending.length; index += 1) {
@@ -370,14 +494,21 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
       }
 
       const result = response.data.results?.[index];
+      if (!result) {
+        accumulated.delete(query.purl);
+        failedPurls.push(query.purl);
+        continue;
+      }
+
       const existing = accumulated.get(query.purl) ?? [];
-      if (result?.vulns) {
+      if (result.vulns) {
         existing.push(...result.vulns);
       }
       accumulated.set(query.purl, existing);
 
-      const nextPageToken = result?.next_page_token?.trim();
+      const nextPageToken = result.next_page_token?.trim();
       if (nextPageToken) {
+        continuationCount += 1;
         nextPending.push({
           pageToken: nextPageToken,
           purl: query.purl
@@ -385,7 +516,11 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
       }
     }
 
-    return nextPending;
+    return {
+      continuationCount,
+      failedPurls,
+      nextPending
+    };
   }
 
   private mapAccumulatedPayloads(
@@ -425,6 +560,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
 
   private buildErrorQueryRecords(
     purls: readonly string[],
+    existingRecordsByPurl: ReadonlyMap<string, PersistedComponentQueryRecord>,
     queriedAtMs: number,
     seenAtMs: number
   ): readonly PersistedComponentQueryRecord[] {
@@ -434,14 +570,42 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
       lastQueriedAtMs: queriedAtMs,
       lastSeenInWorkspaceAtMs: seenAtMs,
       resultState: 'error',
-      vulnerabilityCacheKeys: []
+      vulnerabilityCacheKeys: [...(existingRecordsByPurl.get(purl)?.vulnerabilityCacheKeys ?? [])]
     }));
+  }
+
+  private selectFailedFallbackRecords(
+    failedPurls: readonly string[],
+    recordsByPurl: ReadonlyMap<string, PersistedComponentQueryRecord>
+  ): readonly PersistedComponentQueryRecord[] {
+    const fallbackRecords: PersistedComponentQueryRecord[] = [];
+
+    for (const purl of failedPurls) {
+      const record = recordsByPurl.get(purl);
+      if (!record || record.vulnerabilityCacheKeys.length === 0) {
+        continue;
+      }
+
+      fallbackRecords.push(record);
+    }
+
+    return fallbackRecords;
   }
 
   private toDeterministicCacheKeys(vulnerabilities: readonly Vulnerability[]): readonly string[] {
     return Array.from(new Set(vulnerabilities
       .map((vulnerability) => buildOsvVulnerabilityCacheKey(vulnerability.id, this.id))))
       .sort((left, right) => left.localeCompare(right));
+  }
+
+  private countMappedVulnerabilities(accumulated: ReadonlyMap<string, readonly OsvVulnerabilityPayload[]>): number {
+    let mappedVulnerabilityCount = 0;
+
+    for (const payloads of accumulated.values()) {
+      mappedVulnerabilityCount += payloads.length;
+    }
+
+    return mappedVulnerabilityCount;
   }
 
   private dedupeVulnerabilities(vulnerabilities: Iterable<Vulnerability>): readonly Vulnerability[] {
@@ -452,6 +616,90 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     }
 
     return sortVulnerabilitiesDeterministically(deduped.values());
+  }
+
+  private summarizeClassifications(classifications: readonly CachedQueryClassification[]): CacheClassificationSummary {
+    let cacheErrorStateCount = 0;
+    let cacheHitCount = 0;
+    let cacheMissCount = 0;
+    let cacheStaleCount = 0;
+
+    for (const classification of classifications) {
+      switch (classification.freshness) {
+        case 'fresh-positive':
+          cacheHitCount += 1;
+          break;
+        case 'fresh-negative':
+        case 'missing':
+          cacheMissCount += 1;
+          break;
+        case 'stale':
+          cacheStaleCount += 1;
+          break;
+        case 'error-state':
+          cacheErrorStateCount += 1;
+          break;
+        default:
+          break;
+      }
+    }
+
+    return {
+      cacheErrorStateCount,
+      cacheHitCount,
+      cacheMissCount,
+      cacheStaleCount
+    };
+  }
+
+  private logFetchPlan(context: {
+    readonly cacheErrorStateCount: number;
+    readonly cacheHitCount: number;
+    readonly cacheMissCount: number;
+    readonly cacheStaleCount: number;
+    readonly expiredPrunedCount: number;
+    readonly normalizedValidPurlCount: number;
+    readonly orphanPrunedCount: number;
+    readonly rawActivePurlCount: number;
+  }): void {
+    console.info('[vulndash.osv.fetch.plan]', {
+      source: this.name,
+      feedId: this.id,
+      rawActivePurlCount: context.rawActivePurlCount,
+      normalizedValidPurlCount: context.normalizedValidPurlCount,
+      cacheHitCount: context.cacheHitCount,
+      cacheMissCount: context.cacheMissCount,
+      cacheStaleCount: context.cacheStaleCount,
+      cacheErrorStateCount: context.cacheErrorStateCount,
+      pruneOrphanedCount: context.orphanPrunedCount,
+      pruneExpiredCount: context.expiredPrunedCount
+    });
+  }
+
+  private logFetchComplete(context: {
+    readonly batchCount: number;
+    readonly continuationCount: number;
+    readonly mappedVulnerabilityCount: number;
+    readonly partialFailureCount: number;
+    readonly pruneExpiredCount: number;
+    readonly pruneOrphanedCount: number;
+    readonly retriesPerformed: number;
+    readonly returnedVulnerabilityCount: number;
+    readonly warnings: readonly string[];
+  }): void {
+    console.info('[vulndash.osv.fetch.complete]', {
+      source: this.name,
+      feedId: this.id,
+      osvBatchCount: context.batchCount,
+      continuationCount: context.continuationCount,
+      mappedVulnerabilityCount: context.mappedVulnerabilityCount,
+      returnedVulnerabilityCount: context.returnedVulnerabilityCount,
+      partialFailureCount: context.partialFailureCount,
+      pruneOrphanedCount: context.pruneOrphanedCount,
+      pruneExpiredCount: context.pruneExpiredCount,
+      retriesPerformed: context.retriesPerformed,
+      warnings: [...context.warnings]
+    });
   }
 
   private async processWithConcurrency<TInput, TOutput>(
