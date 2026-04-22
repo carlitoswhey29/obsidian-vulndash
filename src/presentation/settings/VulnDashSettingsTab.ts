@@ -28,6 +28,9 @@ const getNvdFeed = (settings: VulnDashSettings) =>
 const getGitHubAdvisoryFeed = (settings: VulnDashSettings) =>
   settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'github_advisory' }> =>
     feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
+const getOsvFeed = (settings: VulnDashSettings) =>
+  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'osv' }> =>
+    feed.type === 'osv' && feed.id === 'osv-default');
 
 export class VulnDashSettingTab extends PluginSettingTab {
   private computedProductFiltersRenderId = 0;
@@ -397,6 +400,16 @@ export class VulnDashSettingTab extends PluginSettingTab {
           ...current,
           enableGithubFeed: value,
           feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default' && feed.type === 'github_advisory' ? { ...feed, enabled: value } : feed))
+        });
+      }));
+
+    new Setting(containerEl)
+      .setName('Enable OSV feed')
+      .addToggle((toggle) => toggle.setValue(getOsvFeed(settings)?.enabled ?? false).onChange(async (value) => {
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          feeds: current.feeds.map((feed) => (feed.id === 'osv-default' && feed.type === 'osv' ? { ...feed, enabled: value } : feed))
         });
       }));
 
