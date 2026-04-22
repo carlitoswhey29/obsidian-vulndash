@@ -20,6 +20,17 @@ export interface OsvSeverityPayload {
   readonly score: string;
 }
 
+export interface OsvDatabaseSpecificPayload {
+  readonly severity?: string;
+  readonly source?: string;
+  readonly [key: string]: unknown;
+}
+
+export interface OsvEcosystemSpecificPayload {
+  readonly severity?: string;
+  readonly [key: string]: unknown;
+}
+
 export interface OsvReferencePayload {
   readonly type: string;
   readonly url: string;
@@ -36,15 +47,16 @@ export interface OsvAffectedRangePayload {
   readonly type: string;
   readonly repo?: string;
   readonly events: readonly OsvAffectedRangeEventPayload[];
-  readonly database_specific?: Readonly<Record<string, unknown>>;
+  readonly database_specific?: OsvDatabaseSpecificPayload;
 }
 
 export interface OsvAffectedPayload {
   readonly package?: OsvPackagePayload;
+  readonly severity?: readonly OsvSeverityPayload[];
   readonly ranges?: readonly OsvAffectedRangePayload[];
   readonly versions?: readonly string[];
-  readonly ecosystem_specific?: Readonly<Record<string, unknown>>;
-  readonly database_specific?: Readonly<Record<string, unknown>>;
+  readonly ecosystem_specific?: OsvEcosystemSpecificPayload;
+  readonly database_specific?: OsvDatabaseSpecificPayload;
 }
 
 export interface OsvVulnerabilityPayload {
@@ -55,10 +67,12 @@ export interface OsvVulnerabilityPayload {
   readonly summary?: string;
   readonly details?: string;
   readonly aliases?: readonly string[];
+  readonly related?: readonly string[];
+  readonly upstream?: readonly string[];
   readonly references?: readonly OsvReferencePayload[];
   readonly affected?: readonly OsvAffectedPayload[];
   readonly severity?: readonly OsvSeverityPayload[];
-  readonly database_specific?: Readonly<Record<string, unknown>>;
+  readonly database_specific?: OsvDatabaseSpecificPayload;
   readonly schema_version?: string;
 }
 
