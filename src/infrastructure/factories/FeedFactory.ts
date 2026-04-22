@@ -60,6 +60,10 @@ export const buildFeedsFromConfig = (
         ));
         break;
       }
+      case 'osv': {
+        console.warn('[vulndash.feed.unimplemented]', { id: config.id, type: config.type });
+        break;
+      }
       default: {
         const unreachable: never = config;
         console.warn('[vulndash.feed.unknown]', unreachable);
