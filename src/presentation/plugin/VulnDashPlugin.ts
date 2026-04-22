@@ -61,6 +61,7 @@ import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
 import { HttpClient } from '../../infrastructure/clients/common/HttpClient';
 import { CooperativeScheduler } from '../../infrastructure/async/CooperativeScheduler';
+import type { IOsvQueryCache } from '../../infrastructure/clients/osv/IOsvQueryCache';
 import { CacheHydrator } from '../../infrastructure/storage/CacheHydrator';
 import { CachePruner } from '../../infrastructure/storage/CachePruner';
 import { IndexedDbTriageRepository } from '../../infrastructure/storage/IndexedDbTriageRepository';
@@ -954,9 +955,24 @@ export default class VulnDashPlugin extends Plugin {
 
   public async getActiveWorkspacePurls(): Promise<readonly string[]> {
     const catalog = await this.getSbomCatalog();
-    return catalog.components
-      .filter((component) => component.isEnabled && typeof component.purl === 'string' && component.purl.trim().length > 0)
-      .map((component) => component.purl as string);
+    const purls: string[] = [];
+    const seen = new Set<string>();
+
+    for (const component of catalog.components) {
+      if (!component.isEnabled || typeof component.purl !== 'string') {
+        continue;
+      }
+
+      const normalizedPurl = component.purl.trim();
+      if (!normalizedPurl || seen.has(normalizedPurl)) {
+        continue;
+      }
+
+      seen.add(normalizedPurl);
+      purls.push(normalizedPurl);
+    }
+
+    return purls;
   }
 
   public async getComponentInventorySnapshot(): Promise<ComponentInventorySnapshot> {
@@ -1457,9 +1473,10 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     const client = new HttpClient();
+    const osvQueryCache: IOsvQueryCache | undefined = this.persistentCacheServices?.cacheRepository;
     const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls, {
-      ...(this.persistentCacheServices ? { osvQueryCache: this.persistentCacheServices.cacheRepository } : {}),
-      getOsvPurls: async () => this.getActiveWorkspacePurls()
+      ...(osvQueryCache ? { osvQueryCache } : {}),
+      getPurls: async () => this.getActiveWorkspacePurls()
     });
     const generation = this.syncServiceGeneration;
     const syncService = new VulnerabilitySyncService({
