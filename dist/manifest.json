@@ -1,7 +1,7 @@
 {
   "id": "vulndash",
   "name": "VulnDash",
-  "version": "0.7.0",
+  "version": "0.8.0-dev",
   "minAppVersion": "1.5.0",
   "description": "Near-live vulnerability and CVE dashboard for Obsidian.",
   "author": "Carlos Aguilar",
