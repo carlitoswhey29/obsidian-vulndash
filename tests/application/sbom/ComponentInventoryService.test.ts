@@ -3,7 +3,7 @@ import test from 'node:test';
 import { ComponentInventoryService } from '../../../src/application/sbom/ComponentInventoryService';
 import type { SbomLoadResult } from '../../../src/application/use-cases/SbomImportService';
 import type { ImportedSbomConfig, VulnDashSettings } from '../../../src/application/use-cases/types';
-import { DEFAULT_SETTINGS } from '../../../src/plugin';
+import { DEFAULT_SETTINGS } from '../../../src/main';
 import type { NormalizedSbomDocument } from '../../../src/domain/sbom/types';
 
 const service = new ComponentInventoryService();

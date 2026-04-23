@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildPersistedSettingsSnapshot, DEFAULT_SETTINGS, migrateLegacySettings, SETTINGS_VERSION } from '../src/plugin';
+import { BUILT_IN_FEEDS, FEED_TYPES } from '../src/domain/feeds/FeedTypes';
+import { buildPersistedSettingsSnapshot, DEFAULT_SETTINGS, migrateLegacySettings, SETTINGS_VERSION } from '../src/main';
 
 test('buildPersistedSettingsSnapshot keeps persisted SBOM settings lean and normalized', () => {
   const snapshot = buildPersistedSettingsSnapshot({
@@ -67,10 +68,10 @@ test('migrateLegacySettings maps legacy auto-note settings into the daily rollup
 });
 
 test('default settings include a safe OSV feed configuration', () => {
-  const osvFeed = DEFAULT_SETTINGS.feeds.find((feed) => feed.type === 'osv');
+  const osvFeed = DEFAULT_SETTINGS.feeds.find((feed) => feed.type === FEED_TYPES.OSV);
 
   assert.ok(osvFeed);
-  assert.equal(osvFeed?.id, 'osv-default');
+  assert.equal(osvFeed?.id, BUILT_IN_FEEDS.OSV.id);
   assert.equal(osvFeed?.enabled, false);
   assert.equal(osvFeed?.cacheTtlMs, 21_600_000);
   assert.equal(osvFeed?.negativeCacheTtlMs, 3_600_000);
@@ -82,9 +83,9 @@ test('migrateLegacySettings normalizes invalid OSV feed values predictably', () 
   const migrated = migrateLegacySettings({
     feeds: [
       {
-        id: 'osv-default',
-        name: 'OSV',
-        type: 'osv',
+        id: BUILT_IN_FEEDS.OSV.id,
+        name: BUILT_IN_FEEDS.OSV.name,
+        type: FEED_TYPES.OSV,
         enabled: true,
         cacheTtlMs: 0,
         negativeCacheTtlMs: -1,
@@ -94,7 +95,7 @@ test('migrateLegacySettings normalizes invalid OSV feed values predictably', () 
     ]
   });
 
-  const osvFeed = migrated.feeds.find((feed) => feed.type === 'osv');
+  const osvFeed = migrated.feeds.find((feed) => feed.type === FEED_TYPES.OSV);
 
   assert.ok(osvFeed);
   assert.equal(osvFeed?.enabled, true);

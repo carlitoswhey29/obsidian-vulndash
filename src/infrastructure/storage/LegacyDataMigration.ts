@@ -1,4 +1,5 @@
 import type { FeedConfig } from '../../application/use-cases/types';
+import { BUILT_IN_FEEDS } from '../../domain/feeds/FeedTypes';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { SyncMetadataRepository } from './SyncMetadataRepository';
 import { VulnCacheRepository } from './VulnCacheRepository';
@@ -72,11 +73,11 @@ const resolveLegacySourceId = (source: string, feeds: readonly FeedConfig[]): st
     return feedByNormalizedName.id;
   }
 
-  if (normalized === 'github') {
-    return 'github-advisories-default';
+  if (BUILT_IN_FEEDS.GITHUB_ADVISORY.legacySourceAliases?.some((alias) => alias === normalized)) {
+    return BUILT_IN_FEEDS.GITHUB_ADVISORY.id;
   }
-  if (normalized === 'nvd') {
-    return 'nvd-default';
+  if (BUILT_IN_FEEDS.NVD.legacySourceAliases?.some((alias) => alias === normalized)) {
+    return BUILT_IN_FEEDS.NVD.id;
   }
 
   return normalized.replace(/[^a-z0-9._-]+/g, '-');
