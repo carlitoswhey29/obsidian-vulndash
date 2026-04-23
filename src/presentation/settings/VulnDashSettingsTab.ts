@@ -1,9 +1,10 @@
 import { App, Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
+import { DEFAULT_SETTINGS } from '../../application/use-cases/DefaultSettings';
 import type { ColumnVisibility, VulnDashSettings, ImportedSbomConfig } from '../../application/use-cases/types';
 import { BUILT_IN_FEEDS, FEED_TYPES } from '../../domain/feeds/FeedTypes';
 import { TRIAGE_STATES, formatTriageStateLabel } from '../../domain/triage/TriageState';
 import { summarizeSbomWorkspace } from '../../application/use-cases/SbomWorkspaceService';
-import VulnDashPlugin, { DEFAULT_SETTINGS } from '../plugin/VulnDashPlugin';
+import VulnDashPlugin from '../plugin/VulnDashPlugin';
 import { ProductFiltersModal } from '../modals/ProductFiltersModal';
 import { SbomManagerModal } from '../modals/SbomManagerModal';
 
