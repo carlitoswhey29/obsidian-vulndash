@@ -16,6 +16,7 @@ node_modules/
 styles.css.map
 *.map
 
+
 # obsidian
 data.json
 
@@ -29,3 +30,4 @@ sbom.json
 # dist/
 
 schemas/
+*.tmp-testbundle-settings/
