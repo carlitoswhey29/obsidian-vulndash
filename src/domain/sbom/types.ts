@@ -7,12 +7,12 @@ export type NormalizedSeverity =
   | 'low'
   | 'informational';
 
-export interface NormalizedDataviewFields {
-  vulnerabilityCount: number;
+export interface NormalizedComponentVulnerabilitySummary {
+  cweIds: number[];
   highestSeverity?: NormalizedSeverity;
-  cweList: string[];
-  vulnerabilityIds: string[];
   severities: NormalizedSeverity[];
+  vulnerabilityCount: number;
+  vulnerabilityIds: string[];
 }
 
 export interface NormalizedCweGroup {
@@ -38,10 +38,10 @@ export interface NormalizedVulnerability {
 
 export interface NormalizedComponent {
   cweGroups: NormalizedCweGroup[];
-  dataview: NormalizedDataviewFields;
   id: string;
   name: string;
   notePath?: string | null;
+  vulnerabilitySummary: NormalizedComponentVulnerabilitySummary;
   vulnerabilities: NormalizedVulnerability[];
   vulnerabilityCount: number;
   cpe?: string;

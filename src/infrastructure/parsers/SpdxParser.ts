@@ -1,6 +1,6 @@
 import type {
   NormalizedComponent,
-  NormalizedDataviewFields,
+  NormalizedComponentVulnerabilitySummary,
   NormalizedSbomDocument
 } from '../../domain/sbom/types';
 import { PurlNormalizer } from '../../domain/services/PurlNormalizer';
@@ -41,8 +41,8 @@ const getTrimmedString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const buildEmptyDataviewFields = (): NormalizedDataviewFields => ({
-  cweList: [],
+const buildEmptyVulnerabilitySummary = (): NormalizedComponentVulnerabilitySummary => ({
+  cweIds: [],
   severities: [],
   vulnerabilityCount: 0,
   vulnerabilityIds: []
@@ -111,9 +111,9 @@ export const parseSpdxJson = (
 
     const normalized: NormalizedComponent = {
       cweGroups: [],
-      dataview: buildEmptyDataviewFields(),
       id: getTrimmedString(pkg.SPDXID) ?? `${name}@${version ?? 'unknown'}#${index}`,
       name,
+      vulnerabilitySummary: buildEmptyVulnerabilitySummary(),
       vulnerabilities: [],
       vulnerabilityCount: 0
     };

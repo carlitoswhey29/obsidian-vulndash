@@ -2,6 +2,7 @@ import type {
   NormalizedSbomFormat,
   NormalizedSeverity
 } from '../../domain/sbom/types';
+import { getHighestSeverity, getSeverityRank } from '../../domain/value-objects/Severity';
 import type {
   ComponentInventoryWorkspaceSnapshot,
   RelatedVulnerabilitySummary,
@@ -41,14 +42,6 @@ export interface ComponentInventoryDisplayEntry {
   vulnerabilityCount: number;
 }
 
-const severityOrder: Record<NormalizedSeverity, number> = {
-  critical: 5,
-  high: 4,
-  informational: 1,
-  low: 2,
-  medium: 3
-};
-
 const normalizeToken = (value: string): string =>
   value.trim().replace(/\s+/g, ' ').toLowerCase();
 
@@ -72,21 +65,6 @@ const severityFromRelatedVulnerability = (
   }
 };
 
-const pickHigherSeverity = (
-  left: NormalizedSeverity | undefined,
-  right: NormalizedSeverity | undefined
-): NormalizedSeverity | undefined => {
-  if (!left) {
-    return right;
-  }
-
-  if (!right) {
-    return left;
-  }
-
-  return severityOrder[left] >= severityOrder[right] ? left : right;
-};
-
 const getUniqueVulnerabilityCount = (
   component: TrackedComponent,
   relatedVulnerabilities: readonly RelatedVulnerabilitySummary[]
@@ -108,10 +86,10 @@ const getEffectiveHighestSeverity = (
   component: TrackedComponent,
   relatedVulnerabilities: readonly RelatedVulnerabilitySummary[]
 ): NormalizedSeverity | undefined =>
-  relatedVulnerabilities.reduce<NormalizedSeverity | undefined>(
-    (highest, vulnerability) => pickHigherSeverity(highest, severityFromRelatedVulnerability(vulnerability)),
-    component.highestSeverity
-  );
+  getHighestSeverity([
+    component.highestSeverity,
+    ...relatedVulnerabilities.map((vulnerability) => severityFromRelatedVulnerability(vulnerability))
+  ]);
 
 const toDisplayEntry = (
   snapshot: ComponentInventoryWorkspaceSnapshot,
@@ -161,7 +139,7 @@ const matchesSeverityThreshold = (
     return false;
   }
 
-  return severityOrder[highestSeverity] >= severityOrder[threshold];
+  return getSeverityRank(highestSeverity) >= getSeverityRank(threshold);
 };
 
 export const createDefaultComponentInventoryFilters = (): ComponentInventoryFilters => ({

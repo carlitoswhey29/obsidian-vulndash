@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ComponentInventoryService } from '../../../src/application/sbom/ComponentInventoryService';
+import { DEFAULT_SETTINGS } from '../../../src/application/use-cases/DefaultSettings';
 import type { SbomLoadResult } from '../../../src/application/use-cases/SbomImportService';
 import type { ImportedSbomConfig, VulnDashSettings } from '../../../src/application/use-cases/types';
-import { DEFAULT_SETTINGS } from '../../../src/main';
 import type { NormalizedSbomDocument } from '../../../src/domain/sbom/types';
 
 const service = new ComponentInventoryService();
@@ -22,13 +22,6 @@ const createDocument = (sourcePath: string): NormalizedSbomDocument => ({
   components: [
     {
       cweGroups: [{ count: 1, cwe: 79, vulnerabilityIds: ['CVE-2026-0001'] }],
-      dataview: {
-        cweList: ['CWE-79'],
-        highestSeverity: 'high',
-        severities: ['high'],
-        vulnerabilityCount: 1,
-        vulnerabilityIds: ['CVE-2026-0001']
-      },
       highestSeverity: 'high',
       id: 'component-1',
       license: 'MIT',
@@ -43,7 +36,14 @@ const createDocument = (sourcePath: string): NormalizedSbomDocument => ({
           severity: 'high'
         }
       ],
-      vulnerabilityCount: 1
+      vulnerabilityCount: 1,
+      vulnerabilitySummary: {
+        cweIds: [79],
+        highestSeverity: 'high',
+        severities: ['high'],
+        vulnerabilityCount: 1,
+        vulnerabilityIds: ['CVE-2026-0001']
+      },
     }
   ],
   format: 'cyclonedx',

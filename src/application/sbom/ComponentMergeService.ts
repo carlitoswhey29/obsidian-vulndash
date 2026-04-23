@@ -3,27 +3,11 @@ import type {
   NormalizedSeverity,
   NormalizedVulnerability
 } from '../../domain/sbom/types';
+import { getHighestSeverity, getSeverityRank } from '../../domain/value-objects/Severity';
 import type { CatalogComponentInput, TrackedComponent, TrackedComponentSource } from './types';
 
 const normalizeToken = (value: string): string =>
   value.trim().replace(/\s+/g, ' ').toLowerCase();
-
-const getSeverityRank = (severity: NormalizedSeverity | undefined): number => {
-  switch (severity) {
-    case 'critical':
-      return 5;
-    case 'high':
-      return 4;
-    case 'medium':
-      return 3;
-    case 'low':
-      return 2;
-    case 'informational':
-      return 1;
-    default:
-      return 0;
-  }
-};
 
 const compareOptionalStrings = (
   left: string | null | undefined,
@@ -92,7 +76,7 @@ const pickHighestSeverity = (
   left: NormalizedSeverity | undefined,
   right: NormalizedSeverity | undefined
 ): NormalizedSeverity | undefined =>
-  getSeverityRank(left) >= getSeverityRank(right) ? left : right;
+  getHighestSeverity([left, right]);
 
 const mergeNumbers = (left: readonly number[], right: readonly number[]): number[] =>
   Array.from(new Set([...left, ...right])).sort((first, second) => first - second);
@@ -373,10 +357,11 @@ export class ComponentMergeService {
       merged.notePath = notePath;
     }
 
-    const highestSeverity = vulnerabilities.reduce<NormalizedSeverity | undefined>(
-      (current, vulnerability) => pickHighestSeverity(current, vulnerability.severity),
-      pickHighestSeverity(left.highestSeverity, right.highestSeverity)
-    );
+    const highestSeverity = getHighestSeverity([
+      left.highestSeverity,
+      right.highestSeverity,
+      ...vulnerabilities.map((vulnerability) => vulnerability.severity)
+    ]);
     if (highestSeverity) {
       merged.highestSeverity = highestSeverity;
     }
