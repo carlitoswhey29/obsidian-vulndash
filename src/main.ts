@@ -4,6 +4,6 @@ export {
 } from './application/use-cases/DefaultSettings';
 export {
   buildPersistedSettingsSnapshot,
-  default,
   migrateLegacySettings
-} from './presentation/plugin/VulnDashPlugin';
+} from './application/settings/SettingsMigrator';
+export { default } from './presentation/plugin/VulnDashPlugin';

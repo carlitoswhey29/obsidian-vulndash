@@ -32,20 +32,18 @@ import {
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from '../../application/use-cases/SyncOutcomeDiagnostics';
 import { VulnerabilitySyncService, type SyncOutcome } from '../../application/use-cases/SyncVulnerabilitiesUseCase';
 import {
-  DEFAULT_CACHE_STORAGE,
-  DEFAULT_COLUMN_VISIBILITY,
-  DEFAULT_DAILY_ROLLUP_SETTINGS,
-  DEFAULT_FEEDS,
-  DEFAULT_SETTINGS,
-  MAX_OSV_CONCURRENT_BATCHES,
-  SETTINGS_VERSION,
-  getDefaultOsvFeedConfig
+  DEFAULT_SETTINGS
 } from '../../application/use-cases/DefaultSettings';
+import {
+  buildPersistedSettingsSnapshot,
+  normalizeImportedSbomConfig,
+  normalizeRuntimeSettings,
+  normalizeSbomOverride,
+  SettingsMigrator,
+  type SettingsMigrationInput
+} from '../../application/settings/SettingsMigrator';
 import type {
-  FeedConfig,
   ImportedSbomConfig,
-  CacheStorageSettings,
-  DailyRollupSettings,
   ResolvedSbomComponent,
   RuntimeSbomState,
   SbomComponentOverride,
@@ -56,25 +54,23 @@ import { ResolveAffectedProjects, type ProjectNoteLookupResult } from '../../app
 import { createProjectNoteReference } from '../../domain/correlation/ProjectNoteReference';
 import { createSbomProjectMapping } from '../../domain/correlation/SbomProjectMapping';
 import type { AffectedProjectResolution } from '../../domain/correlation/AffectedProjectResolution';
-import { BUILT_IN_FEEDS, FEED_TYPES } from '../../domain/feeds/FeedTypes';
+import { FEED_TYPES } from '../../domain/feeds/FeedTypes';
 import { SbomComponentIndex } from '../../infrastructure/correlation/SbomComponentIndex';
 import { ProjectNoteLookupService, type ProjectNoteOption } from '../../infrastructure/obsidian/ProjectNoteLookupService';
 import { SbomProjectMappingRepository } from '../../infrastructure/storage/SbomProjectMappingRepository';
 import { JoinTriageState, type JoinedTriageVulnerability } from '../../application/triage/JoinTriageState';
 import { SetTriageState } from '../../application/triage/SetTriageState';
-import { normalizeTriageFilterMode } from '../../application/triage/FilterByTriageState';
 import { buildTriageCorrelationKeyForVulnerability } from '../../domain/triage/TriageCorrelation';
 import type { TriageRecord } from '../../domain/triage/TriageRecord';
 import { DEFAULT_TRIAGE_STATE, type TriageState } from '../../domain/triage/TriageState';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
-import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
 import { HttpClient } from '../../infrastructure/clients/common/HttpClient';
 import { CooperativeScheduler } from '../../infrastructure/async/CooperativeScheduler';
 import type { IOsvQueryCache } from '../../infrastructure/clients/osv/IOsvQueryCache';
 import { CacheHydrator } from '../../infrastructure/storage/CacheHydrator';
 import { CachePruner } from '../../infrastructure/storage/CachePruner';
 import { IndexedDbTriageRepository } from '../../infrastructure/storage/IndexedDbTriageRepository';
-import { LegacyDataMigration, type LegacyPersistedPluginData } from '../../infrastructure/storage/LegacyDataMigration';
+import { LegacyDataMigration } from '../../infrastructure/storage/LegacyDataMigration';
 import { SyncMetadataRepository } from '../../infrastructure/storage/SyncMetadataRepository';
 import { VulnCacheDb } from '../../infrastructure/storage/VulnCacheDb';
 import { VulnCacheRepository } from '../../infrastructure/storage/VulnCacheRepository';
@@ -88,367 +84,10 @@ import { GenerateDailyRollupCommand } from '../commands/GenerateDailyRollupComma
 import { VulnDashSettingTab } from '../settings/VulnDashSettingsTab';
 import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from '../../infrastructure/security/crypto';
 
-interface LegacyImportedSbomComponent {
-  bomRef?: unknown;
-  cpe?: unknown;
-  excluded?: unknown;
-  name?: unknown;
-  normalizedName?: unknown;
-  purl?: unknown;
-}
-
-interface LegacyImportedSbomConfig extends Partial<ImportedSbomConfig> {
-  components?: LegacyImportedSbomComponent[];
-  lastImportError?: unknown;
-  lastImportHash?: unknown;
-}
-
-const legacyNameNormalizer = new ProductNameNormalizer();
 const componentPreferenceService = new ComponentPreferenceService();
-
-const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
-
-const normalizePositiveInteger = (value: unknown, fallback: number): number =>
-  typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
-
-const normalizeBoundedPositiveInteger = (value: unknown, fallback: number, maximum: number): number =>
-  Math.min(normalizePositiveInteger(value, fallback), maximum);
-
-const normalizeFeedConfigs = (feeds: FeedConfig[] | undefined): FeedConfig[] => (feeds ?? []).map((feed) => {
-  if (feed.type === FEED_TYPES.NVD) {
-    return {
-      ...feed,
-      dateFilterType: feed.dateFilterType === 'published' ? 'published' : 'modified'
-    };
-  }
-
-  if (feed.type === FEED_TYPES.OSV) {
-    const defaults = getDefaultOsvFeedConfig();
-    return {
-      ...feed,
-      cacheTtlMs: normalizePositiveInteger(feed.cacheTtlMs, defaults.cacheTtlMs),
-      negativeCacheTtlMs: normalizePositiveInteger(feed.negativeCacheTtlMs, defaults.negativeCacheTtlMs),
-      requestTimeoutMs: normalizePositiveInteger(feed.requestTimeoutMs, defaults.requestTimeoutMs),
-      maxConcurrentBatches: normalizeBoundedPositiveInteger(
-        feed.maxConcurrentBatches,
-        defaults.maxConcurrentBatches,
-        MAX_OSV_CONCURRENT_BATCHES
-      )
-    };
-  }
-
-  return { ...feed };
-});
-
-const normalizeStringList = (values: string[] | undefined): string[] => {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-
-  return Array.from(new Set(values
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0)));
-};
-
-const normalizePathList = (values: string[] | undefined): string[] => {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-
-  return Array.from(new Set(values
-    .map((value) => typeof value === 'string' ? normalizePath(value.trim()) : '')
-    .filter((value) => value.length > 0)));
-};
 
 const areStringListsEqual = (left: string[], right: string[]): boolean =>
   left.length === right.length && left.every((value, index) => value === right[index]);
-
-const buildLegacySbomLabel = (path: string): string => {
-  const normalized = normalizePath(path);
-  const segments = normalized.split('/').filter(Boolean);
-  const candidate = segments.at(-1);
-  return candidate && candidate.length > 0 ? candidate : 'SBOM';
-};
-
-const getTrimmedString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
-
-const normalizeImportedSbomConfig = (
-  sbom: Partial<ImportedSbomConfig> & {
-    componentCount?: unknown;
-    lastError?: unknown;
-    lastImportError?: unknown;
-    lastImportHash?: unknown;
-    lastImportedAt?: unknown;
-  },
-  index: number
-): ImportedSbomConfig => {
-  const namespace = getTrimmedString(sbom.namespace);
-  const contentHash = getTrimmedString(sbom.contentHash) || getTrimmedString(sbom.lastImportHash);
-  const lastError = getTrimmedString(sbom.lastError) || getTrimmedString(sbom.lastImportError);
-  const componentCount = typeof sbom.componentCount === 'number' && Number.isFinite(sbom.componentCount) && sbom.componentCount >= 0
-    ? sbom.componentCount
-    : undefined;
-  const lastImportedAt = typeof sbom.lastImportedAt === 'number' && Number.isFinite(sbom.lastImportedAt)
-    ? sbom.lastImportedAt
-    : 0;
-  const linkedProjectNotePath = getTrimmedString(sbom.linkedProjectNotePath);
-  const linkedProjectDisplayName = getTrimmedString(sbom.linkedProjectDisplayName);
-
-  const normalized: ImportedSbomConfig = {
-    contentHash,
-    enabled: sbom.enabled ?? true,
-    id: getTrimmedString(sbom.id) || `sbom-${index + 1}`,
-    label: getTrimmedString(sbom.label) || buildLegacySbomLabel(getTrimmedString(sbom.path)),
-    lastImportedAt,
-    path: getTrimmedString(sbom.path) ? normalizePath(getTrimmedString(sbom.path)) : ''
-  };
-
-  if (namespace) {
-    normalized.namespace = namespace;
-  }
-  if (componentCount !== undefined) {
-    normalized.componentCount = componentCount;
-  }
-  if (lastError) {
-    normalized.lastError = lastError;
-  }
-  if (linkedProjectNotePath) {
-    normalized.linkedProjectNotePath = normalizePath(linkedProjectNotePath);
-  }
-  if (linkedProjectDisplayName) {
-    normalized.linkedProjectDisplayName = linkedProjectDisplayName;
-  }
-
-  return normalized;
-};
-
-const createLegacySbomConfig = (path: string): ImportedSbomConfig => {
-  const normalizedPath = normalizePath(path);
-  return {
-    contentHash: '',
-    enabled: true,
-    id: 'sbom-1',
-    label: buildLegacySbomLabel(normalizedPath),
-    lastImportedAt: 0,
-    path: normalizedPath
-  };
-};
-
-const normalizeSbomOverride = (override: Partial<SbomComponentOverride>): SbomComponentOverride | null => {
-  const editedName = getTrimmedString(override.editedName);
-  const excluded = override.excluded === true;
-  const normalized: SbomComponentOverride = {};
-
-  if (editedName) {
-    normalized.editedName = editedName;
-  }
-  if (excluded) {
-    normalized.excluded = true;
-  }
-
-  return Object.keys(normalized).length > 0 ? normalized : null;
-};
-
-const normalizeSbomOverrides = (overrides: Record<string, SbomComponentOverride> | undefined): Record<string, SbomComponentOverride> => {
-  if (!overrides || typeof overrides !== 'object') {
-    return {};
-  }
-
-  const normalizedEntries = Object.entries(overrides).flatMap(([key, value]) => {
-    const override = normalizeSbomOverride(value);
-    return override ? [[key, override] as const] : [];
-  });
-
-  return Object.fromEntries(normalizedEntries);
-};
-
-const migrateLegacySbomOverrides = (sboms: LegacyImportedSbomConfig[]): Record<string, SbomComponentOverride> => {
-  const overrides: Record<string, SbomComponentOverride> = {};
-
-  for (const [index, sbom] of sboms.entries()) {
-    const normalizedSbom = normalizeImportedSbomConfig(sbom, index);
-    const components = Array.isArray(sbom.components) ? sbom.components : [];
-
-    for (const component of components) {
-      const originalName = getTrimmedString(component.name)
-        || getTrimmedString(component.normalizedName)
-        || getTrimmedString(component.cpe)
-        || getTrimmedString(component.purl)
-        || getTrimmedString(component.bomRef);
-      if (!originalName) {
-        continue;
-      }
-
-      const editedName = getTrimmedString(component.normalizedName);
-      const defaultName = legacyNameNormalizer.normalize(originalName) || originalName;
-      const overrideInput: Partial<SbomComponentOverride> = {
-        excluded: component.excluded === true
-      };
-      if (editedName && editedName !== defaultName) {
-        overrideInput.editedName = editedName;
-      }
-      const override = normalizeSbomOverride(overrideInput);
-      if (!override) {
-        continue;
-      }
-
-      overrides[buildSbomOverrideKey(normalizedSbom.id, originalName)] = override;
-    }
-  }
-
-  return overrides;
-};
-
-const normalizeCacheStorage = (value: Partial<CacheStorageSettings> | undefined): CacheStorageSettings => ({
-  hardCap: typeof value?.hardCap === 'number' && Number.isFinite(value.hardCap) && value.hardCap > 0 ? Math.floor(value.hardCap) : DEFAULT_CACHE_STORAGE.hardCap,
-  hydrateMaxItems: typeof value?.hydrateMaxItems === 'number' && Number.isFinite(value.hydrateMaxItems) && value.hydrateMaxItems > 0 ? Math.floor(value.hydrateMaxItems) : DEFAULT_CACHE_STORAGE.hydrateMaxItems,
-  hydratePageSize: typeof value?.hydratePageSize === 'number' && Number.isFinite(value.hydratePageSize) && value.hydratePageSize > 0 ? Math.floor(value.hydratePageSize) : DEFAULT_CACHE_STORAGE.hydratePageSize,
-  pruneBatchSize: typeof value?.pruneBatchSize === 'number' && Number.isFinite(value.pruneBatchSize) && value.pruneBatchSize > 0 ? Math.floor(value.pruneBatchSize) : DEFAULT_CACHE_STORAGE.pruneBatchSize,
-  ttlMs: typeof value?.ttlMs === 'number' && Number.isFinite(value.ttlMs) && value.ttlMs > 0 ? Math.floor(value.ttlMs) : DEFAULT_CACHE_STORAGE.ttlMs
-});
-
-const normalizeDailyRollupSettings = (
-  value: Partial<DailyRollupSettings> | undefined,
-  legacy: {
-    autoHighNoteCreationEnabled?: unknown;
-    autoNoteCreationEnabled?: unknown;
-    autoNoteFolder?: unknown;
-  } = {}
-): DailyRollupSettings => {
-  const severityThreshold = value?.severityThreshold ?? (legacy.autoHighNoteCreationEnabled === true ? 'HIGH' : DEFAULT_DAILY_ROLLUP_SETTINGS.severityThreshold);
-  const excludedTriageStates = Array.isArray(value?.excludedTriageStates)
-    ? Array.from(new Set(value.excludedTriageStates.filter((state): state is TriageState => typeof state === 'string' && state.length > 0)))
-    : [...DEFAULT_DAILY_ROLLUP_SETTINGS.excludedTriageStates];
-  const folderPath = typeof value?.folderPath === 'string' && value.folderPath.trim().length > 0
-    ? normalizePath(value.folderPath.trim())
-    : (typeof legacy.autoNoteFolder === 'string' && legacy.autoNoteFolder.trim().length > 0
-      ? normalizePath(legacy.autoNoteFolder.trim())
-      : DEFAULT_DAILY_ROLLUP_SETTINGS.folderPath);
-
-  return {
-    autoGenerateOnFirstSyncOfDay: typeof value?.autoGenerateOnFirstSyncOfDay === 'boolean'
-      ? value.autoGenerateOnFirstSyncOfDay
-      : legacy.autoNoteCreationEnabled === true || legacy.autoHighNoteCreationEnabled === true,
-    excludedTriageStates,
-    folderPath,
-    includeUnmappedFindings: value?.includeUnmappedFindings ?? DEFAULT_DAILY_ROLLUP_SETTINGS.includeUnmappedFindings,
-    lastAutoGeneratedOn: typeof value?.lastAutoGeneratedOn === 'string' ? value.lastAutoGeneratedOn.trim() : '',
-    severityThreshold
-  };
-};
-
-const normalizeRuntimeSettings = (settings: VulnDashSettings): VulnDashSettings => ({
-  ...componentPreferenceService.normalizeSettings(settings),
-  keywordFilters: normalizeStringList(settings.keywordFilters),
-  manualProductFilters: normalizeStringList(settings.manualProductFilters),
-  productFilters: normalizeStringList(settings.productFilters),
-  feeds: normalizeFeedConfigs(settings.feeds),
-  sbomFolders: normalizePathList(settings.sbomFolders),
-  sboms: settings.sboms.map((sbom, index) => normalizeImportedSbomConfig(sbom, index)),
-  sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
-  dashboardDateField: settings.dashboardDateField === 'published' ? 'published' : 'modified',
-  triageFilter: normalizeTriageFilterMode(settings.triageFilter),
-  dailyRollup: normalizeDailyRollupSettings(settings.dailyRollup),
-  sbomPath: '',
-  cacheStorage: normalizeCacheStorage(settings.cacheStorage),
-  settingsVersion: SETTINGS_VERSION
-});
-
-export const migrateLegacySettings = (settings: Partial<VulnDashSettings> & {
-  autoHighNoteCreationEnabled?: unknown;
-  autoNoteCreationEnabled?: unknown;
-  autoNoteFolder?: unknown;
-  sboms?: LegacyImportedSbomConfig[];
-}): VulnDashSettings => {
-  const hasDynamicFeeds = Array.isArray(settings.feeds) && settings.feeds.length > 0;
-  const feeds = hasDynamicFeeds
-    ? normalizeFeedConfigs(settings.feeds)
-    : DEFAULT_FEEDS.map((feed) => cloneFeedConfig(feed));
-
-  if (!hasDynamicFeeds) {
-    const nvdFeed = feeds.find((feed): feed is Extract<FeedConfig, { type: typeof FEED_TYPES.NVD }> =>
-      feed.type === FEED_TYPES.NVD && feed.id === BUILT_IN_FEEDS.NVD.id);
-    if (nvdFeed && settings.nvdApiKey) {
-      nvdFeed.apiKey = settings.nvdApiKey;
-    }
-    if (typeof settings.enableNvdFeed === 'boolean' && nvdFeed) {
-      nvdFeed.enabled = settings.enableNvdFeed;
-    }
-
-    const githubFeed = feeds.find((feed) =>
-      feed.type === FEED_TYPES.GITHUB_ADVISORY && feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id);
-    if (githubFeed && settings.githubToken) {
-      githubFeed.token = settings.githubToken;
-    }
-    if (typeof settings.enableGithubFeed === 'boolean' && githubFeed) {
-      githubFeed.enabled = settings.enableGithubFeed;
-    }
-  }
-
-  const cursor = { ...(settings.sourceSyncCursor ?? {}) };
-  const legacyNvdCursor = BUILT_IN_FEEDS.NVD.legacyCursorKey ? cursor[BUILT_IN_FEEDS.NVD.legacyCursorKey] : undefined;
-  const legacyGithubCursor = BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey
-    ? cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey]
-    : undefined;
-  if (legacyNvdCursor && !cursor[BUILT_IN_FEEDS.NVD.id]) {
-    cursor[BUILT_IN_FEEDS.NVD.id] = legacyNvdCursor;
-  }
-  if (legacyGithubCursor && !cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.id]) {
-    cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.id] = legacyGithubCursor;
-  }
-  if (BUILT_IN_FEEDS.NVD.legacyCursorKey) {
-    delete cursor[BUILT_IN_FEEDS.NVD.legacyCursorKey];
-  }
-  if (BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey) {
-    delete cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey];
-  }
-
-  const isCurrentSettingsVersion = (settings.settingsVersion ?? 0) >= SETTINGS_VERSION;
-  const legacyProductFilters = normalizeStringList(settings.productFilters);
-  const manualProductFilters = normalizeStringList(isCurrentSettingsVersion
-    ? settings.manualProductFilters
-    : (settings.manualProductFilters ?? legacyProductFilters));
-  const productFilters = normalizeStringList(isCurrentSettingsVersion
-    ? (settings.productFilters ?? [])
-    : manualProductFilters);
-
-  const rawSboms = Array.isArray(settings.sboms) ? settings.sboms : [];
-  const sboms = rawSboms.length > 0
-    ? rawSboms.map((sbom, index) => normalizeImportedSbomConfig(sbom, index))
-    : (settings.sbomPath?.trim()
-      ? [createLegacySbomConfig(settings.sbomPath)]
-      : []);
-
-  const migratedOverrides = migrateLegacySbomOverrides(rawSboms);
-  const sbomOverrides = normalizeSbomOverrides({
-    ...migratedOverrides,
-    ...(settings.sbomOverrides ?? {})
-  });
-
-  return normalizeRuntimeSettings({
-    ...DEFAULT_SETTINGS,
-    ...settings,
-    dailyRollup: normalizeDailyRollupSettings(settings.dailyRollup, settings),
-    manualProductFilters,
-    productFilters,
-    sboms,
-    sbomOverrides,
-    settingsVersion: SETTINGS_VERSION,
-    feeds,
-    sourceSyncCursor: cursor,
-    columnVisibility: {
-      ...DEFAULT_COLUMN_VISIBILITY,
-      ...(settings.columnVisibility ?? {})
-    },
-    syncControls: {
-      ...DEFAULT_SETTINGS.syncControls,
-      ...(settings.syncControls ?? {})
-    },
-    cacheStorage: normalizeCacheStorage(settings.cacheStorage)
-  });
-};
 
 const createEmptySbomConfig = (index: number): ImportedSbomConfig => ({
   contentHash: '',
@@ -457,24 +96,6 @@ const createEmptySbomConfig = (index: number): ImportedSbomConfig => ({
   label: `SBOM ${index + 1}`,
   lastImportedAt: 0,
   path: ''
-});
-
-export const buildPersistedSettingsSnapshot = (
-  settings: VulnDashSettings,
-  secrets: {
-    githubToken: string;
-    nvdApiKey: string;
-  },
-  feeds: FeedConfig[]
-): VulnDashSettings => ({
-  ...componentPreferenceService.normalizeSettings(settings),
-  sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
-  sbomFolders: normalizePathList(settings.sbomFolders),
-  sbomPath: '',
-  settingsVersion: SETTINGS_VERSION,
-  nvdApiKey: secrets.nvdApiKey,
-  githubToken: secrets.githubToken,
-  feeds
 });
 
 interface PersistentCacheServices {
@@ -486,12 +107,7 @@ interface PersistentCacheServices {
   triageRepository: IndexedDbTriageRepository;
 }
 
-type LoadedPluginData = LegacyPersistedPluginData & Partial<VulnDashSettings> & {
-  autoHighNoteCreationEnabled?: unknown;
-  autoNoteCreationEnabled?: unknown;
-  autoNoteFolder?: unknown;
-  sboms?: LegacyImportedSbomConfig[];
-};
+type LoadedPluginData = SettingsMigrationInput;
 
 interface VisibleTriageState {
   readonly correlationKey: string;
@@ -511,6 +127,7 @@ export default class VulnDashPlugin extends Plugin {
   private readonly sbomCatalogService = new SbomCatalogService();
   private readonly sbomComparisonService = new SbomComparisonService();
   private readonly sbomFilterMergeService = new SbomFilterMergeService();
+  private readonly settingsMigrator = new SettingsMigrator();
   private readonly sbomComponentIndex = new SbomComponentIndex();
   private readonly sbomProjectMappingRepository = new SbomProjectMappingRepository(
     () => this.settings.sboms,
@@ -1586,20 +1203,20 @@ export default class VulnDashPlugin extends Plugin {
       };
     }));
 
-    const migrated = migrateLegacySettings({
+    const migration = this.settingsMigrator.migrate({
       ...(loadedSettings ?? {}),
       nvdApiKey: nvdSecret.value,
       githubToken: githubSecret.value,
       feeds: loadedFeeds
     });
-    this.settings = migrated;
+    this.settings = migration.settings;
     this.invalidateSyncService();
 
     if (nvdSecret.decryptionFailed || githubSecret.decryptionFailed) {
       new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
     }
 
-    if (nvdSecret.needsMigration || githubSecret.needsMigration || (loadedSettings?.settingsVersion ?? 0) < SETTINGS_VERSION) {
+    if (nvdSecret.needsMigration || githubSecret.needsMigration || migration.didMigrate) {
       await this.saveSettings();
     }
   }

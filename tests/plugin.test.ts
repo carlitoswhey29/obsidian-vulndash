@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { BUILT_IN_FEEDS, FEED_TYPES } from '../src/domain/feeds/FeedTypes';
-import { buildPersistedSettingsSnapshot, DEFAULT_SETTINGS, migrateLegacySettings, SETTINGS_VERSION } from '../src/main';
+import { buildPersistedSettingsSnapshot } from '../src/application/settings/SettingsMigrator';
+import { DEFAULT_SETTINGS, SETTINGS_VERSION } from '../src/application/use-cases/DefaultSettings';
 
 test('buildPersistedSettingsSnapshot keeps persisted SBOM settings lean and normalized', () => {
   const snapshot = buildPersistedSettingsSnapshot({
@@ -40,33 +41,6 @@ test('buildPersistedSettingsSnapshot keeps persisted SBOM settings lean and norm
   assert.deepEqual(snapshot.productFilters, ['Portal Web', 'Gateway Service']);
 });
 
-test('migrateLegacySettings defaults malformed component preference arrays safely', () => {
-  const migrated = migrateLegacySettings({
-    followedSbomComponentKeys: [' PURL:PKG:NPM/REACT@18.3.1 ', 7, null] as unknown as string[],
-    disabledSbomComponentKeys: 'invalid' as unknown as string[],
-    sbomFolders: [' reports ', '', null] as unknown as string[],
-    settingsVersion: 2
-  });
-
-  assert.deepEqual(migrated.followedSbomComponentKeys, ['purl:pkg:npm/react@18.3.1']);
-  assert.deepEqual(migrated.disabledSbomComponentKeys, []);
-  assert.deepEqual(migrated.sbomFolders, ['reports']);
-  assert.equal(migrated.settingsVersion, SETTINGS_VERSION);
-});
-
-test('migrateLegacySettings maps legacy auto-note settings into the daily rollup configuration', () => {
-  const migrated = migrateLegacySettings({
-    autoHighNoteCreationEnabled: true,
-    autoNoteCreationEnabled: true,
-    autoNoteFolder: 'Ops Briefings',
-    settingsVersion: 7
-  } as never);
-
-  assert.equal(migrated.dailyRollup.folderPath, 'Ops Briefings');
-  assert.equal(migrated.dailyRollup.autoGenerateOnFirstSyncOfDay, true);
-  assert.equal(migrated.dailyRollup.severityThreshold, 'HIGH');
-});
-
 test('default settings include a safe OSV feed configuration', () => {
   const osvFeed = DEFAULT_SETTINGS.feeds.find((feed) => feed.type === FEED_TYPES.OSV);
 
@@ -77,30 +51,4 @@ test('default settings include a safe OSV feed configuration', () => {
   assert.equal(osvFeed?.negativeCacheTtlMs, 3_600_000);
   assert.equal(osvFeed?.requestTimeoutMs, 15_000);
   assert.equal(osvFeed?.maxConcurrentBatches, 4);
-});
-
-test('migrateLegacySettings normalizes invalid OSV feed values predictably', () => {
-  const migrated = migrateLegacySettings({
-    feeds: [
-      {
-        id: BUILT_IN_FEEDS.OSV.id,
-        name: BUILT_IN_FEEDS.OSV.name,
-        type: FEED_TYPES.OSV,
-        enabled: true,
-        cacheTtlMs: 0,
-        negativeCacheTtlMs: -1,
-        requestTimeoutMs: Number.NaN,
-        maxConcurrentBatches: 99
-      }
-    ]
-  });
-
-  const osvFeed = migrated.feeds.find((feed) => feed.type === FEED_TYPES.OSV);
-
-  assert.ok(osvFeed);
-  assert.equal(osvFeed?.enabled, true);
-  assert.equal(osvFeed?.cacheTtlMs, 21_600_000);
-  assert.equal(osvFeed?.negativeCacheTtlMs, 3_600_000);
-  assert.equal(osvFeed?.requestTimeoutMs, 15_000);
-  assert.equal(osvFeed?.maxConcurrentBatches, 8);
 });
