@@ -1,5 +1,12 @@
 import { App, Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
-import { DEFAULT_SETTINGS } from '../../application/use-cases/DefaultSettings';
+import {
+  DEFAULT_OSV_ENDPOINT_URL,
+  DEFAULT_OSV_MAX_BATCH_SIZE,
+  DEFAULT_SETTINGS,
+  MAX_CONFIGURABLE_OSV_BATCH_SIZE,
+  parseConfiguredOsvEndpointUrl,
+  parseConfiguredOsvMaxBatchSize
+} from '../../application/use-cases/DefaultSettings';
 import type { ColumnVisibility, VulnDashSettings, ImportedSbomConfig } from '../../application/use-cases/types';
 import { BUILT_IN_FEEDS, FEED_TYPES } from '../../domain/feeds/FeedTypes';
 import { TRIAGE_STATES, formatTriageStateLabel } from '../../domain/triage/TriageState';
@@ -422,6 +429,62 @@ export class VulnDashSettingTab extends PluginSettingTab {
           ))
         });
       }));
+
+    const osvEndpointSetting = new Setting(containerEl)
+      .setName('OSV batch endpoint URL')
+      .setDesc('Full HTTP(S) querybatch endpoint. Leave blank to use the public OSV API default.');
+    this.bindBlurPersistedText(osvEndpointSetting, {
+      initialValue: getOsvFeed(settings)?.osvEndpointUrl ?? DEFAULT_OSV_ENDPOINT_URL,
+      persist: async (value, committedValue) => {
+        const trimmed = value.trim();
+        const nextEndpointUrl = trimmed.length === 0
+          ? DEFAULT_OSV_ENDPOINT_URL
+          : parseConfiguredOsvEndpointUrl(trimmed);
+        if (!nextEndpointUrl) {
+          new Notice('OSV endpoint must be a valid absolute HTTP(S) URL.');
+          return committedValue;
+        }
+
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
+              ? { ...feed, osvEndpointUrl: nextEndpointUrl }
+              : feed
+          ))
+        });
+        return nextEndpointUrl;
+      }
+    });
+
+    const osvBatchSizeSetting = new Setting(containerEl)
+      .setName('OSV max batch size')
+      .setDesc(`Queries per OSV batch request. Leave blank to reset to ${DEFAULT_OSV_MAX_BATCH_SIZE}.`);
+    this.bindBlurPersistedText(osvBatchSizeSetting, {
+      initialValue: String(getOsvFeed(settings)?.osvMaxBatchSize ?? DEFAULT_OSV_MAX_BATCH_SIZE),
+      persist: async (value, committedValue) => {
+        const trimmed = value.trim();
+        const nextBatchSize = trimmed.length === 0
+          ? DEFAULT_OSV_MAX_BATCH_SIZE
+          : parseConfiguredOsvMaxBatchSize(trimmed);
+        if (nextBatchSize === null) {
+          new Notice(`OSV max batch size must be an integer between 1 and ${MAX_CONFIGURABLE_OSV_BATCH_SIZE}.`);
+          return committedValue;
+        }
+
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
+              ? { ...feed, osvMaxBatchSize: nextBatchSize }
+              : feed
+          ))
+        });
+        return String(nextBatchSize);
+      }
+    });
 
     containerEl.createEl('h3', { text: 'Daily Threat Briefing' });
 

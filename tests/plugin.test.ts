@@ -51,4 +51,6 @@ test('default settings include a safe OSV feed configuration', () => {
   assert.equal(osvFeed?.negativeCacheTtlMs, 3_600_000);
   assert.equal(osvFeed?.requestTimeoutMs, 15_000);
   assert.equal(osvFeed?.maxConcurrentBatches, 4);
+  assert.equal(osvFeed?.osvEndpointUrl, 'https://api.osv.dev/v1/querybatch');
+  assert.equal(osvFeed?.osvMaxBatchSize, 1000);
 });

@@ -39,7 +39,9 @@ test('builds only enabled feeds and skips invalid config entries', () => {
       cacheTtlMs: 21_600_000,
       negativeCacheTtlMs: 3_600_000,
       requestTimeoutMs: 15_000,
-      maxConcurrentBatches: 4
+      maxConcurrentBatches: 4,
+      osvEndpointUrl: 'https://api.osv.dev/v1/querybatch',
+      osvMaxBatchSize: 1000
     }
   ];
 
@@ -59,7 +61,9 @@ test('builds an OSV feed when runtime dependencies are provided', async () => {
       cacheTtlMs: 21_600_000,
       negativeCacheTtlMs: 3_600_000,
       requestTimeoutMs: 15_000,
-      maxConcurrentBatches: 4
+      maxConcurrentBatches: 4,
+      osvEndpointUrl: 'https://api.osv.dev/v1/querybatch',
+      osvMaxBatchSize: 1000
     }
   ];
   const seenPurls: string[][] = [];
@@ -144,7 +148,9 @@ test('building an OSV feed does not affect existing feed construction', () => {
       cacheTtlMs: 21_600_000,
       negativeCacheTtlMs: 3_600_000,
       requestTimeoutMs: 15_000,
-      maxConcurrentBatches: 4
+      maxConcurrentBatches: 4,
+      osvEndpointUrl: 'https://api.osv.dev/v1/querybatch',
+      osvMaxBatchSize: 1000
     }
   ];
 

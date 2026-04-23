@@ -74,6 +74,7 @@ class FakeOsvQueryCache implements IOsvQueryCache {
 
 class FakeHttpClient implements IHttpClient {
   public readonly postBodies: OsvBatchRequest[] = [];
+  public readonly postUrls: string[] = [];
   private readonly handlers: Array<(body: OsvBatchRequest) => Promise<HttpResponse<OsvBatchResponse>>>;
 
   public constructor(handlers: Array<(body: OsvBatchRequest) => Promise<HttpResponse<OsvBatchResponse>>>) {
@@ -85,12 +86,13 @@ class FakeHttpClient implements IHttpClient {
   }
 
   public async postJson<TRequest, TResponse>(
-    _url: string,
+    url: string,
     body: TRequest,
     _headers: Record<string, string>,
     _signal: AbortSignal
   ): Promise<HttpResponse<TResponse>> {
     const typedBody = body as unknown as OsvBatchRequest;
+    this.postUrls.push(url);
     this.postBodies.push(typedBody);
     const next = this.handlers.shift();
     if (!next) {
@@ -110,6 +112,8 @@ const createConfig = (overrides: Partial<OsvFeedConfig> = {}): OsvFeedConfig => 
   negativeCacheTtlMs: 30_000,
   requestTimeoutMs: 15_000,
   maxConcurrentBatches: 2,
+  osvEndpointUrl: 'https://api.osv.dev/v1/querybatch',
+  osvMaxBatchSize: 1000,
   ...overrides
 });
 
@@ -296,8 +300,8 @@ test('error-state query records do not suppress re-querying', async () => {
   assert.deepEqual(result.vulnerabilities.map((vulnerability) => vulnerability.id), ['OSV-2026-3']);
 });
 
-test('batch size enforcement chunks requests at 1000 queries', async () => {
-  const purls = Array.from({ length: 1001 }, (_, index) => `pkg:npm/example-${index}@1.0.0`);
+test('configured batch size chunks requests using the runtime config', async () => {
+  const purls = Array.from({ length: 5 }, (_, index) => `pkg:npm/example-${index}@1.0.0`);
   const queryCache = new FakeOsvQueryCache();
   const httpClient = new FakeHttpClient([
     async (body) => ({
@@ -311,13 +315,34 @@ test('batch size enforcement chunks requests at 1000 queries', async () => {
       data: { results: body.queries.map(() => ({ vulns: [] })) }
     })
   ]);
-  const client = createClient(httpClient, queryCache, async () => purls);
+  const client = createClient(httpClient, queryCache, async () => purls, { osvMaxBatchSize: 2 });
 
   await client.fetchVulnerabilities({ signal: new AbortController().signal });
 
-  assert.equal(httpClient.postBodies.length, 2);
-  assert.equal(httpClient.postBodies[0]?.queries.length, 1000);
-  assert.equal(httpClient.postBodies[1]?.queries.length, 1);
+  assert.equal(httpClient.postBodies.length, 3);
+  assert.equal(httpClient.postBodies[0]?.queries.length, 2);
+  assert.equal(httpClient.postBodies[1]?.queries.length, 2);
+  assert.equal(httpClient.postBodies[2]?.queries.length, 1);
+});
+
+test('configured endpoint URL is used for batch requests', async () => {
+  const queryCache = new FakeOsvQueryCache();
+  const httpClient = new FakeHttpClient([
+    async () => ({
+      status: 200,
+      headers: {},
+      data: {
+        results: [{ vulns: [] }]
+      }
+    })
+  ]);
+  const client = createClient(httpClient, queryCache, async () => ['pkg:npm/a@1.0.0'], {
+    osvEndpointUrl: 'https://osv.internal.example/v1/querybatch'
+  });
+
+  await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.deepEqual(httpClient.postUrls, ['https://osv.internal.example/v1/querybatch']);
 });
 
 test('duplicate vulnerabilities across multiple PURLs are deduped', async () => {
