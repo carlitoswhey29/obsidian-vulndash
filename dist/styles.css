@@ -895,6 +895,7 @@
   border-top: 1px solid var(--background-modifier-border);
   vertical-align: top;
   user-select: text;
+  text-align: left; /* Aligns headers with the data columns */
 }
 
 .vulndash-component-table thead th {
@@ -912,7 +913,7 @@
 
 /* Column Widths for 9-column layout */
 .vulndash-component-table th:nth-child(1),
-.vulndash-component-table td:nth-child(1) { width: 38%; } /* Component */
+.vulndash-component-table td:nth-child(1) { width: 30%; } /* Component */
 
 .vulndash-component-table th:nth-child(2),
 .vulndash-component-table td:nth-child(2) { width: 12%; } /* License */
@@ -927,7 +928,7 @@
 .vulndash-component-table td:nth-child(5) { width: 5%; } /* Vulnerabilities */
 
 .vulndash-component-table th:nth-child(6),
-.vulndash-component-table td:nth-child(6) { width: 10%; } /* Actions */
+.vulndash-component-table td:nth-child(6) { width: 18%; } /* Actions */
 
 
 .vulndash-component-row.is-followed {

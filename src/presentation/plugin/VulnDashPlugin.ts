@@ -110,7 +110,7 @@ const DEFAULT_FEEDS: FeedConfig[] = [
     id: 'osv-default',
     name: 'OSV',
     type: 'osv',
-    enabled: false,
+    enabled: true,
     cacheTtlMs: 6 * 60 * 60 * 1000,
     negativeCacheTtlMs: 60 * 60 * 1000,
     requestTimeoutMs: 15_000,
