@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import type { ColumnVisibility, VulnDashSettings, ImportedSbomConfig } from '../../application/use-cases/types';
+import { BUILT_IN_FEEDS, FEED_TYPES } from '../../domain/feeds/FeedTypes';
 import { TRIAGE_STATES, formatTriageStateLabel } from '../../domain/triage/TriageState';
 import { summarizeSbomWorkspace } from '../../application/use-cases/SbomWorkspaceService';
 import VulnDashPlugin, { DEFAULT_SETTINGS } from '../plugin/VulnDashPlugin';
@@ -23,14 +24,14 @@ const PRODUCT_FILTER_PREVIEW_LIMIT = 5;
 const BUTTON_FEEDBACK_MS = 1_200;
 
 const getNvdFeed = (settings: VulnDashSettings) =>
-  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'nvd' }> =>
-    feed.type === 'nvd' && feed.id === 'nvd-default');
+  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.NVD }> =>
+    feed.type === FEED_TYPES.NVD && feed.id === BUILT_IN_FEEDS.NVD.id);
 const getGitHubAdvisoryFeed = (settings: VulnDashSettings) =>
-  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'github_advisory' }> =>
-    feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
+  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.GITHUB_ADVISORY }> =>
+    feed.type === FEED_TYPES.GITHUB_ADVISORY && feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id);
 const getOsvFeed = (settings: VulnDashSettings) =>
-  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: 'osv' }> =>
-    feed.type === 'osv' && feed.id === 'osv-default');
+  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.OSV }> =>
+    feed.type === FEED_TYPES.OSV && feed.id === BUILT_IN_FEEDS.OSV.id);
 
 export class VulnDashSettingTab extends PluginSettingTab {
   private computedProductFiltersRenderId = 0;
@@ -370,7 +371,9 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           enableNvdFeed: value,
-          feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd' ? { ...feed, enabled: value } : feed))
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD ? { ...feed, enabled: value } : feed
+          ))
         });
       }));
 
@@ -385,7 +388,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
             const current = this.plugin.getSettings();
             await this.plugin.updateSettings({
               ...current,
-              feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+              feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD
                 ? { ...feed, dateFilterType: value as 'modified' | 'published' }
                 : feed))
             });
@@ -399,7 +402,11 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           enableGithubFeed: value,
-          feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default' && feed.type === 'github_advisory' ? { ...feed, enabled: value } : feed))
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id && feed.type === FEED_TYPES.GITHUB_ADVISORY
+              ? { ...feed, enabled: value }
+              : feed
+          ))
         });
       }));
 
@@ -409,7 +416,9 @@ export class VulnDashSettingTab extends PluginSettingTab {
         const current = this.plugin.getSettings();
         await this.plugin.updateSettings({
           ...current,
-          feeds: current.feeds.map((feed) => (feed.id === 'osv-default' && feed.type === 'osv' ? { ...feed, enabled: value } : feed))
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV ? { ...feed, enabled: value } : feed
+          ))
         });
       }));
 
@@ -506,7 +515,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           nvdApiKey: nextKey,
-          feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD
             ? { ...feed, apiKey: nextKey }
             : feed))
         });
@@ -526,9 +535,11 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           githubToken: nextToken,
-          feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default' && feed.type === 'github_advisory'
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id && feed.type === FEED_TYPES.GITHUB_ADVISORY
             ? { ...feed, token: nextToken }
-            : feed))
+            : feed
+          ))
         });
         return nextToken;
       }

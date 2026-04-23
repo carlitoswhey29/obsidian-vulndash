@@ -6,6 +6,7 @@ import type {
   VulnerabilityFeed
 } from '../../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../../domain/entities/Vulnerability';
+import { BUILT_IN_FEEDS } from '../../../domain/feeds/FeedTypes';
 import { PurlNormalizer } from '../../../domain/services/PurlNormalizer';
 import {
   buildVulnerabilityCacheKey,
@@ -545,7 +546,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     for (const [purl, vulnerabilities] of resultsByPurl) {
       records.push({
         purl,
-        source: 'osv',
+        source: BUILT_IN_FEEDS.OSV.type,
         lastQueriedAtMs: queriedAtMs,
         lastSeenInWorkspaceAtMs: seenAtMs,
         resultState: vulnerabilities.length > 0 ? 'hit' : 'miss',
@@ -566,7 +567,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
   ): readonly PersistedComponentQueryRecord[] {
     return purls.map((purl) => ({
       purl,
-      source: 'osv',
+      source: BUILT_IN_FEEDS.OSV.type,
       lastQueriedAtMs: queriedAtMs,
       lastSeenInWorkspaceAtMs: seenAtMs,
       resultState: 'error',

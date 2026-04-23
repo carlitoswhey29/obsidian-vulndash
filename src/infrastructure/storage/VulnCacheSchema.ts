@@ -1,3 +1,4 @@
+import { BUILT_IN_FEEDS } from '../../domain/feeds/FeedTypes';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import type { TriageRecord } from '../../domain/triage/TriageRecord';
 
@@ -35,7 +36,7 @@ export interface PersistedVulnerabilityRecord {
 
 export interface PersistedComponentQueryRecord {
   readonly purl: string;
-  readonly source: 'osv';
+  readonly source: typeof BUILT_IN_FEEDS.OSV.type;
   readonly lastQueriedAtMs: number;
   readonly lastSeenInWorkspaceAtMs: number;
   readonly resultState: 'hit' | 'miss' | 'error';

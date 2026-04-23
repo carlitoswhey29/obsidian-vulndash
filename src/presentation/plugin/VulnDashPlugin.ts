@@ -48,6 +48,7 @@ import { ResolveAffectedProjects, type ProjectNoteLookupResult } from '../../app
 import { createProjectNoteReference } from '../../domain/correlation/ProjectNoteReference';
 import { createSbomProjectMapping } from '../../domain/correlation/SbomProjectMapping';
 import type { AffectedProjectResolution } from '../../domain/correlation/AffectedProjectResolution';
+import { BUILT_IN_FEEDS, FEED_TYPES } from '../../domain/feeds/FeedTypes';
 import { SbomComponentIndex } from '../../infrastructure/correlation/SbomComponentIndex';
 import { ProjectNoteLookupService, type ProjectNoteOption } from '../../infrastructure/obsidian/ProjectNoteLookupService';
 import { SbomProjectMappingRepository } from '../../infrastructure/storage/SbomProjectMappingRepository';
@@ -104,12 +105,23 @@ const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
 };
 
 const DEFAULT_FEEDS: FeedConfig[] = [
-  { id: 'nvd-default', name: 'NVD', type: 'nvd', enabled: true, dateFilterType: 'modified' },
-  { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true },
   {
-    id: 'osv-default',
-    name: 'OSV',
-    type: 'osv',
+    id: BUILT_IN_FEEDS.NVD.id,
+    name: BUILT_IN_FEEDS.NVD.name,
+    type: BUILT_IN_FEEDS.NVD.type,
+    enabled: true,
+    dateFilterType: 'modified'
+  },
+  {
+    id: BUILT_IN_FEEDS.GITHUB_ADVISORY.id,
+    name: BUILT_IN_FEEDS.GITHUB_ADVISORY.name,
+    type: BUILT_IN_FEEDS.GITHUB_ADVISORY.type,
+    enabled: true
+  },
+  {
+    id: BUILT_IN_FEEDS.OSV.id,
+    name: BUILT_IN_FEEDS.OSV.name,
+    type: BUILT_IN_FEEDS.OSV.type,
     enabled: false,
     cacheTtlMs: 6 * 60 * 60 * 1000,
     negativeCacheTtlMs: 60 * 60 * 1000,
@@ -198,7 +210,7 @@ const normalizeBoundedPositiveInteger = (value: unknown, fallback: number, maxim
   Math.min(normalizePositiveInteger(value, fallback), maximum);
 
 const getDefaultOsvFeedConfig = (): OsvFeedConfig => {
-  const defaultFeed = DEFAULT_FEEDS.find((feed): feed is OsvFeedConfig => feed.type === 'osv');
+  const defaultFeed = DEFAULT_FEEDS.find((feed): feed is OsvFeedConfig => feed.type === FEED_TYPES.OSV);
   if (!defaultFeed) {
     throw new Error('Missing default OSV feed configuration.');
   }
@@ -207,14 +219,14 @@ const getDefaultOsvFeedConfig = (): OsvFeedConfig => {
 };
 
 const normalizeFeedConfigs = (feeds: FeedConfig[] | undefined): FeedConfig[] => (feeds ?? []).map((feed) => {
-  if (feed.type === 'nvd') {
+  if (feed.type === FEED_TYPES.NVD) {
     return {
       ...feed,
       dateFilterType: feed.dateFilterType === 'published' ? 'published' : 'modified'
     };
   }
 
-  if (feed.type === 'osv') {
+  if (feed.type === FEED_TYPES.OSV) {
     const defaults = getDefaultOsvFeedConfig();
     return {
       ...feed,
@@ -458,7 +470,8 @@ export const migrateLegacySettings = (settings: Partial<VulnDashSettings> & {
     : DEFAULT_FEEDS.map((feed) => cloneFeedConfig(feed));
 
   if (!hasDynamicFeeds) {
-    const nvdFeed = feeds.find((feed): feed is Extract<FeedConfig, { type: 'nvd' }> => feed.type === 'nvd' && feed.id === 'nvd-default');
+    const nvdFeed = feeds.find((feed): feed is Extract<FeedConfig, { type: typeof FEED_TYPES.NVD }> =>
+      feed.type === FEED_TYPES.NVD && feed.id === BUILT_IN_FEEDS.NVD.id);
     if (nvdFeed && settings.nvdApiKey) {
       nvdFeed.apiKey = settings.nvdApiKey;
     }
@@ -466,7 +479,8 @@ export const migrateLegacySettings = (settings: Partial<VulnDashSettings> & {
       nvdFeed.enabled = settings.enableNvdFeed;
     }
 
-    const githubFeed = feeds.find((feed) => feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
+    const githubFeed = feeds.find((feed) =>
+      feed.type === FEED_TYPES.GITHUB_ADVISORY && feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id);
     if (githubFeed && settings.githubToken) {
       githubFeed.token = settings.githubToken;
     }
@@ -476,16 +490,22 @@ export const migrateLegacySettings = (settings: Partial<VulnDashSettings> & {
   }
 
   const cursor = { ...(settings.sourceSyncCursor ?? {}) };
-  const legacyNvdCursor = cursor.NVD;
-  const legacyGithubCursor = cursor.GitHub;
-  if (legacyNvdCursor && !cursor['nvd-default']) {
-    cursor['nvd-default'] = legacyNvdCursor;
+  const legacyNvdCursor = BUILT_IN_FEEDS.NVD.legacyCursorKey ? cursor[BUILT_IN_FEEDS.NVD.legacyCursorKey] : undefined;
+  const legacyGithubCursor = BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey
+    ? cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey]
+    : undefined;
+  if (legacyNvdCursor && !cursor[BUILT_IN_FEEDS.NVD.id]) {
+    cursor[BUILT_IN_FEEDS.NVD.id] = legacyNvdCursor;
   }
-  if (legacyGithubCursor && !cursor['github-advisories-default']) {
-    cursor['github-advisories-default'] = legacyGithubCursor;
+  if (legacyGithubCursor && !cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.id]) {
+    cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.id] = legacyGithubCursor;
   }
-  delete cursor.NVD;
-  delete cursor.GitHub;
+  if (BUILT_IN_FEEDS.NVD.legacyCursorKey) {
+    delete cursor[BUILT_IN_FEEDS.NVD.legacyCursorKey];
+  }
+  if (BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey) {
+    delete cursor[BUILT_IN_FEEDS.GITHUB_ADVISORY.legacyCursorKey];
+  }
 
   const isCurrentSettingsVersion = (settings.settingsVersion ?? 0) >= SETTINGS_VERSION;
   const legacyProductFilters = normalizeStringList(settings.productFilters);
@@ -1653,7 +1673,7 @@ export default class VulnDashPlugin extends Plugin {
     const githubSecret = await this.loadSecret(loadedGithub);
 
     const loadedFeeds = await Promise.all((loadedSettings?.feeds ?? []).map(async (feed) => {
-      if (feed.type === 'nvd') {
+      if (feed.type === FEED_TYPES.NVD) {
         const apiKeySecret = await this.loadSecret(feed.apiKey ?? '');
         return {
           ...feed,
@@ -1690,7 +1710,7 @@ export default class VulnDashPlugin extends Plugin {
     const encryptedNvd = await this.serializeSecret(this.settings.nvdApiKey);
     const encryptedGithub = await this.serializeSecret(this.settings.githubToken);
     const feeds = await Promise.all(this.settings.feeds.map(async (feed) => {
-      if (feed.type === 'nvd') {
+      if (feed.type === FEED_TYPES.NVD) {
         return {
           ...feed,
           apiKey: await this.serializeSecret(feed.apiKey ?? '')

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { LegacyDataMigration } from '../../../src/infrastructure/storage/LegacyDataMigration';
 import type { FeedConfig } from '../../../src/application/use-cases/types';
+import { BUILT_IN_FEEDS, FEED_TYPES } from '../../../src/domain/feeds/FeedTypes';
 import type { Vulnerability } from '../../../src/domain/entities/Vulnerability';
 
 class FakeCacheRepository {
@@ -25,8 +26,8 @@ class FakeSyncMetadataRepository {
 }
 
 const feeds: FeedConfig[] = [
-  { enabled: true, id: 'github-default', name: 'GitHub', type: 'github_advisory' },
-  { enabled: true, id: 'nvd-default', name: 'NVD', type: 'nvd' }
+  { enabled: true, id: BUILT_IN_FEEDS.GITHUB_ADVISORY.id, name: BUILT_IN_FEEDS.GITHUB_ADVISORY.name, type: FEED_TYPES.GITHUB_ADVISORY },
+  { enabled: true, id: BUILT_IN_FEEDS.NVD.id, name: BUILT_IN_FEEDS.NVD.name, type: FEED_TYPES.NVD }
 ];
 
 const createVulnerability = (id: string, source: string): Vulnerability => ({
@@ -58,6 +59,12 @@ test('legacy migration moves persisted vulnerability arrays and cursors into the
   assert.equal(result.migratedVulnerabilityCount, 2);
   assert.equal(result.migratedCursorCount, 2);
   assert.equal(result.removedLegacyFields, true);
-  assert.deepEqual(cacheRepository.imported.map((entry) => entry.sourceId).sort(), ['github-default', 'nvd-default']);
-  assert.deepEqual(metadataRepository.successes.map((entry) => entry.sourceId).sort(), ['github-default', 'nvd-default']);
+  assert.deepEqual(
+    cacheRepository.imported.map((entry) => entry.sourceId).sort(),
+    [BUILT_IN_FEEDS.GITHUB_ADVISORY.id, BUILT_IN_FEEDS.NVD.id]
+  );
+  assert.deepEqual(
+    metadataRepository.successes.map((entry) => entry.sourceId).sort(),
+    [BUILT_IN_FEEDS.GITHUB_ADVISORY.id, BUILT_IN_FEEDS.NVD.id]
+  );
 });
