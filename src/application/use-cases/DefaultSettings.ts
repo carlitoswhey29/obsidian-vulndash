@@ -19,6 +19,10 @@ export const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
   publishedAt: true
 };
 
+export const DEFAULT_OSV_ENDPOINT_URL = 'https://api.osv.dev/v1/querybatch';
+export const DEFAULT_OSV_MAX_BATCH_SIZE = 1000;
+export const MAX_CONFIGURABLE_OSV_BATCH_SIZE = 10_000;
+
 export const DEFAULT_FEEDS: FeedConfig[] = [
   {
     id: BUILT_IN_FEEDS.NVD.id,
@@ -41,7 +45,9 @@ export const DEFAULT_FEEDS: FeedConfig[] = [
     cacheTtlMs: 6 * 60 * 60 * 1000,
     negativeCacheTtlMs: 60 * 60 * 1000,
     requestTimeoutMs: 15_000,
-    maxConcurrentBatches: 4
+    maxConcurrentBatches: 4,
+    osvEndpointUrl: DEFAULT_OSV_ENDPOINT_URL,
+    osvMaxBatchSize: DEFAULT_OSV_MAX_BATCH_SIZE
   }
 ];
 
@@ -74,7 +80,7 @@ export const DEFAULT_SYNC_CONTROLS: SyncControls = {
   debugHttpMetadata: false
 };
 
-export const SETTINGS_VERSION = 9;
+export const SETTINGS_VERSION = 10;
 
 export const DEFAULT_SETTINGS: VulnDashSettings = {
   pollingIntervalMs: 60_000,
@@ -120,4 +126,53 @@ export const getDefaultOsvFeedConfig = (): OsvFeedConfig => {
   }
 
   return defaultFeed;
+};
+
+export const normalizeOsvEndpointUrl = (value: unknown, fallback = DEFAULT_OSV_ENDPOINT_URL): string => {
+  const candidate = typeof value === 'string' ? value.trim() : '';
+  if (!candidate) {
+    return fallback;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return fallback;
+    }
+
+    return parsed.toString();
+  } catch {
+    return fallback;
+  }
+};
+
+export const parseConfiguredOsvEndpointUrl = (value: string): string | null => {
+  const normalized = normalizeOsvEndpointUrl(value, '');
+  return normalized.length > 0 ? normalized : null;
+};
+
+export const normalizeOsvMaxBatchSize = (
+  value: unknown,
+  fallback = DEFAULT_OSV_MAX_BATCH_SIZE
+): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  const normalized = Math.floor(value);
+  if (normalized < 1 || normalized > MAX_CONFIGURABLE_OSV_BATCH_SIZE) {
+    return fallback;
+  }
+
+  return normalized;
+};
+
+export const parseConfiguredOsvMaxBatchSize = (value: string): number | null => {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const normalized = normalizeOsvMaxBatchSize(Number.parseInt(trimmed, 10), 0);
+  return normalized > 0 ? normalized : null;
 };

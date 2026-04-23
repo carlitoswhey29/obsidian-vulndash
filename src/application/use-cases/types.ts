@@ -82,6 +82,8 @@ export interface OsvFeedConfig extends FeedConfigBase {
   readonly negativeCacheTtlMs: number;
   readonly requestTimeoutMs: number;
   readonly maxConcurrentBatches: number;
+  readonly osvEndpointUrl: string;
+  readonly osvMaxBatchSize: number;
 }
 
 export type FeedConfig =

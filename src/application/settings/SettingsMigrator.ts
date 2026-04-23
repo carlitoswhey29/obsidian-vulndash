@@ -12,7 +12,9 @@ import {
   DEFAULT_SETTINGS,
   MAX_OSV_CONCURRENT_BATCHES,
   SETTINGS_VERSION,
-  getDefaultOsvFeedConfig
+  getDefaultOsvFeedConfig,
+  normalizeOsvEndpointUrl,
+  normalizeOsvMaxBatchSize
 } from '../use-cases/DefaultSettings';
 import type {
   CacheStorageSettings,
@@ -100,7 +102,9 @@ const normalizeFeedConfigs = (feeds: FeedConfig[] | undefined): FeedConfig[] => 
         feed.maxConcurrentBatches,
         defaults.maxConcurrentBatches,
         MAX_OSV_CONCURRENT_BATCHES
-      )
+      ),
+      osvEndpointUrl: normalizeOsvEndpointUrl(feed.osvEndpointUrl, defaults.osvEndpointUrl),
+      osvMaxBatchSize: normalizeOsvMaxBatchSize(feed.osvMaxBatchSize, defaults.osvMaxBatchSize)
     };
   }
 
@@ -488,6 +492,15 @@ const defaultMigrationSteps: readonly SettingsMigrationStep[] = [
     migrate: (settings) => ({
       ...settings,
       ...migrateLegacySbomSettings(settings)
+    })
+  },
+  {
+    name: 'osv-operational-config',
+    toVersion: 10,
+    shouldApply: (settings) => (settings.settingsVersion ?? 0) < 10,
+    migrate: (settings) => ({
+      ...settings,
+      feeds: normalizeFeedConfigs(settings.feeds)
     })
   }
 ];

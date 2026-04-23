@@ -24,9 +24,6 @@ import type {
   OsvVulnerabilityPayload
 } from './OsvTypes';
 
-const OSV_BATCH_ENDPOINT = 'https://api.osv.dev/v1/querybatch';
-const MAX_OSV_BATCH_SIZE = 1000;
-
 type CacheFreshness = 'error-state' | 'fresh-negative' | 'fresh-positive' | 'missing' | 'stale';
 
 interface CachedQueryClassification {
@@ -324,7 +321,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
       };
     }
 
-    const chunks = this.chunkPurls(purls, MAX_OSV_BATCH_SIZE);
+    const chunks = this.chunkPurls(purls, this.config.osvMaxBatchSize);
     const chunkResults = await this.processWithConcurrency(chunks, this.config.maxConcurrentBatches, async (chunk) =>
       this.fetchChunk(chunk, signal)
     );
@@ -449,7 +446,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
         context: {
           provider: this.name,
           operation: 'fetchVulnerabilities',
-          url: OSV_BATCH_ENDPOINT
+          url: this.config.osvEndpointUrl
         },
         headers: {
           Accept: 'application/json',

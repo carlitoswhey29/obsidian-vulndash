@@ -5,8 +5,11 @@ import {
   DEFAULT_COLUMN_VISIBILITY,
   DEFAULT_DAILY_ROLLUP_SETTINGS,
   DEFAULT_FEEDS,
+  DEFAULT_OSV_ENDPOINT_URL,
+  DEFAULT_OSV_MAX_BATCH_SIZE,
   DEFAULT_SETTINGS,
   DEFAULT_SYNC_CONTROLS,
+  MAX_CONFIGURABLE_OSV_BATCH_SIZE,
   MAX_OSV_CONCURRENT_BATCHES,
   SETTINGS_VERSION,
   getDefaultOsvFeedConfig
@@ -48,7 +51,10 @@ test('default settings constants preserve the existing built-in values', () => {
     debugHttpMetadata: false
   });
   assert.equal(MAX_OSV_CONCURRENT_BATCHES, 8);
-  assert.equal(SETTINGS_VERSION, 9);
+  assert.equal(DEFAULT_OSV_ENDPOINT_URL, 'https://api.osv.dev/v1/querybatch');
+  assert.equal(DEFAULT_OSV_MAX_BATCH_SIZE, 1000);
+  assert.equal(MAX_CONFIGURABLE_OSV_BATCH_SIZE, 10_000);
+  assert.equal(SETTINGS_VERSION, 10);
 });
 
 test('default feeds remain stable and the OSV helper returns the built-in OSV feed', () => {
@@ -74,7 +80,9 @@ test('default feeds remain stable and the OSV helper returns the built-in OSV fe
       cacheTtlMs: 21_600_000,
       negativeCacheTtlMs: 3_600_000,
       requestTimeoutMs: 15_000,
-      maxConcurrentBatches: 4
+      maxConcurrentBatches: 4,
+      osvEndpointUrl: DEFAULT_OSV_ENDPOINT_URL,
+      osvMaxBatchSize: DEFAULT_OSV_MAX_BATCH_SIZE
     }
   ]);
 

@@ -6,6 +6,8 @@ import {
   migrateLegacySettings
 } from '../../../src/application/settings/SettingsMigrator';
 import {
+  DEFAULT_OSV_ENDPOINT_URL,
+  DEFAULT_OSV_MAX_BATCH_SIZE,
   DEFAULT_SETTINGS,
   SETTINGS_VERSION
 } from '../../../src/application/use-cases/DefaultSettings';
@@ -99,7 +101,9 @@ test('migrateLegacySettings normalizes invalid OSV feed values predictably', () 
         cacheTtlMs: 0,
         negativeCacheTtlMs: -1,
         requestTimeoutMs: Number.NaN,
-        maxConcurrentBatches: 99
+        maxConcurrentBatches: 99,
+        osvEndpointUrl: 'ftp://invalid-endpoint',
+        osvMaxBatchSize: 0
       }
     ]
   });
@@ -112,6 +116,8 @@ test('migrateLegacySettings normalizes invalid OSV feed values predictably', () 
   assert.equal(osvFeed?.negativeCacheTtlMs, 3_600_000);
   assert.equal(osvFeed?.requestTimeoutMs, 15_000);
   assert.equal(osvFeed?.maxConcurrentBatches, 8);
+  assert.equal(osvFeed?.osvEndpointUrl, DEFAULT_OSV_ENDPOINT_URL);
+  assert.equal(osvFeed?.osvMaxBatchSize, DEFAULT_OSV_MAX_BATCH_SIZE);
 });
 
 test('SettingsMigrator is idempotent for current settings', () => {
