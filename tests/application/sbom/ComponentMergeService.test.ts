@@ -8,16 +8,16 @@ const service = new ComponentMergeService();
 
 const createComponent = (overrides: Partial<NormalizedComponent> = {}): NormalizedComponent => ({
   cweGroups: [],
-  dataview: {
-    cweList: [],
-    severities: [],
-    vulnerabilityCount: 0,
-    vulnerabilityIds: []
-  },
   id: 'component-1',
   name: 'lodash',
   vulnerabilities: [],
   vulnerabilityCount: 0,
+  vulnerabilitySummary: {
+    cweIds: [],
+    severities: [],
+    vulnerabilityCount: 0,
+    vulnerabilityIds: []
+  },
   ...overrides
 });
 
@@ -53,7 +53,14 @@ test('merges source provenance and deduplicates vulnerabilities conservatively',
           severity: 'high'
         }
       ],
-      vulnerabilityCount: 1
+      vulnerabilityCount: 1,
+      vulnerabilitySummary: {
+        cweIds: [79],
+        highestSeverity: 'high',
+        severities: ['high'],
+        vulnerabilityCount: 1,
+        vulnerabilityIds: ['CVE-2026-0001']
+      }
     })
   ));
 
@@ -79,7 +86,14 @@ test('merges source provenance and deduplicates vulnerabilities conservatively',
           severity: 'medium'
         }
       ],
-      vulnerabilityCount: 2
+      vulnerabilityCount: 2,
+      vulnerabilitySummary: {
+        cweIds: [22, 79, 89],
+        highestSeverity: 'critical',
+        severities: ['critical', 'medium'],
+        vulnerabilityCount: 2,
+        vulnerabilityIds: ['CVE-2026-0001', 'CVE-2026-0002']
+      }
     }),
     'spdx'
   ));
