@@ -51,16 +51,19 @@ test('SelectRollupFindings applies severity and triage policy to correlated find
         state: 'active',
         updatedAt: '2026-04-18T10:00:00.000Z',
         vulnerabilityId: 'CVE-2026-1000'
-      }),
-      state: 'active'
+      })
     }],
     ['NVD:CVE-2026-1001', {
-      record: null,
-      state: 'suppressed'
+      record: TriageRecord.create({
+        correlationKey: 'nvd::cve-2026-1001',
+        source: 'NVD',
+        state: 'suppressed',
+        updatedAt: '2026-04-18T10:05:00.000Z',
+        vulnerabilityId: 'CVE-2026-1001'
+      })
     }],
     ['NVD:CVE-2026-1002', {
-      record: null,
-      state: 'active'
+      record: null
     }]
   ]);
   const affectedProjectsByVulnerabilityRef = new Map([
@@ -103,4 +106,42 @@ test('SelectRollupFindings can include unmapped findings and deduplicates repeat
 
   assert.equal(findings.length, 1);
   assert.deepEqual(findings[0]?.unmappedSboms, unmappedResolution.unmappedSboms);
+});
+
+test('SelectRollupFindings derives triage state from the record or the default state', () => {
+  const selector = new SelectRollupFindings();
+  const vulnerabilities = [
+    createVulnerability({ id: 'CVE-2026-3000', source: 'GitHub', summary: 'First issue' }),
+    createVulnerability({ id: 'CVE-2026-3001', source: 'GitHub', summary: 'Second issue' })
+  ];
+
+  const findings = selector.execute({
+    affectedProjectsByVulnerabilityRef: new Map([
+      ['github::cve-2026-3000', mappedResolution],
+      ['github::cve-2026-3001', mappedResolution]
+    ]),
+    policy: new DailyRollupPolicy({
+      excludedTriageStates: ['investigating'],
+      includeUnmappedFindings: false,
+      severityThreshold: 'HIGH'
+    }),
+    triageByCacheKey: new Map([
+      ['GitHub:CVE-2026-3000', {
+        record: TriageRecord.create({
+          correlationKey: 'github::cve-2026-3000',
+          source: 'GitHub',
+          state: 'investigating',
+          updatedAt: '2026-04-18T10:00:00.000Z',
+          vulnerabilityId: 'CVE-2026-3000'
+        })
+      }],
+      ['GitHub:CVE-2026-3001', {
+        record: null
+      }]
+    ]),
+    vulnerabilities
+  });
+
+  assert.deepEqual(findings.map((finding) => finding.vulnerability.id), ['CVE-2026-3001']);
+  assert.equal(findings[0]?.triageState, 'active');
 });

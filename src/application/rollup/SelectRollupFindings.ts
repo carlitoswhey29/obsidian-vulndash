@@ -10,7 +10,6 @@ import { severityOrder } from '../../domain/value-objects/Severity';
 
 export interface RollupTriageSnapshot {
   readonly record: TriageRecord | null;
-  readonly state: TriageState;
 }
 
 const compareFindings = (left: RollupFinding, right: RollupFinding): number =>
@@ -19,6 +18,9 @@ const compareFindings = (left: RollupFinding, right: RollupFinding): number =>
   || right.vulnerability.publishedAt.localeCompare(left.vulnerability.publishedAt)
   || left.vulnerability.source.localeCompare(right.vulnerability.source)
   || left.vulnerability.id.localeCompare(right.vulnerability.id);
+
+const getTriageState = (snapshot: RollupTriageSnapshot): TriageState =>
+  snapshot.record?.state ?? DEFAULT_TRIAGE_STATE;
 
 export class SelectRollupFindings {
   public constructor(
@@ -40,9 +42,9 @@ export class SelectRollupFindings {
       }
 
       const triage = input.triageByCacheKey.get(key) ?? {
-        record: null,
-        state: DEFAULT_TRIAGE_STATE
+        record: null
       } satisfies RollupTriageSnapshot;
+      const triageState = getTriageState(triage);
       const vulnerabilityRef = this.relationshipNormalizer.buildVulnerabilityRef(vulnerability);
       const resolution = input.affectedProjectsByVulnerabilityRef.get(vulnerabilityRef) ?? {
         affectedProjects: [],
@@ -52,7 +54,7 @@ export class SelectRollupFindings {
       if (!input.policy.shouldInclude({
         resolution,
         severity: vulnerability.severity,
-        triageState: triage.state
+        triageState
       })) {
         continue;
       }
@@ -61,7 +63,7 @@ export class SelectRollupFindings {
         affectedProjects: resolution.affectedProjects,
         key,
         triageRecord: triage.record,
-        triageState: triage.state,
+        triageState,
         unmappedSboms: resolution.unmappedSboms,
         vulnerability
       });
