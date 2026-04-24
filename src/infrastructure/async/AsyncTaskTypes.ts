@@ -1,7 +1,8 @@
+import type { RenderDailyRollupInput, RenderedDailyRollup } from '../../application/rollup/RollupMarkdownRenderer';
 import type { NormalizedVulnerabilityBatch, PipelineBatchInput } from '../../application/pipeline/PipelineTypes';
 import type { NormalizedSbomDocument } from '../../domain/sbom/types';
 
-export type AsyncTaskKind = 'normalize-vulnerabilities' | 'parse-sbom';
+export type AsyncTaskKind = 'normalize-vulnerabilities' | 'parse-sbom' | 'render-daily-rollup';
 
 export interface AsyncTaskToken {
   readonly generation: number;
@@ -30,14 +31,22 @@ export interface NormalizeVulnerabilityTaskResult {
   readonly batch: NormalizedVulnerabilityBatch;
 }
 
+export type RenderDailyRollupTaskRequest = RenderDailyRollupInput;
+
+export interface RenderDailyRollupTaskResult {
+  readonly document: RenderedDailyRollup;
+}
+
 export interface AsyncTaskPayloadByKind {
   readonly 'normalize-vulnerabilities': NormalizeVulnerabilityTaskRequest;
   readonly 'parse-sbom': ParseSbomTaskRequest;
+  readonly 'render-daily-rollup': RenderDailyRollupTaskRequest;
 }
 
 export interface AsyncTaskResultByKind {
   readonly 'normalize-vulnerabilities': NormalizeVulnerabilityTaskResult;
   readonly 'parse-sbom': ParseSbomTaskResult;
+  readonly 'render-daily-rollup': RenderDailyRollupTaskResult;
 }
 
 export interface AsyncTaskRequestMessage<K extends AsyncTaskKind = AsyncTaskKind> {

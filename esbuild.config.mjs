@@ -7,6 +7,7 @@ const production = process.argv.includes('production');
 
 const WORKER_ENTRY_POINTS = {
   normalize: 'src/infrastructure/workers/normalize.worker.ts',
+  rollupRender: 'src/infrastructure/workers/renderDailyRollup.worker.ts',
   sbomParse: 'src/infrastructure/workers/sbomParse.worker.ts'
 };
 
