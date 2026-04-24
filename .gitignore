@@ -30,4 +30,4 @@ sbom.json
 # dist/
 
 schemas/
-*.tmp-testbundle-settings/
+*.tmp-*/
