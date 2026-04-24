@@ -6,6 +6,7 @@ import type { RollupFinding } from '../../../src/domain/rollup/RollupFinding';
 import type { DailyRollupSettings } from '../../../src/application/use-cases/types';
 import type { SelectRollupFindings } from '../../../src/application/rollup/SelectRollupFindings';
 import type { RollupMarkdownRenderer } from '../../../src/application/rollup/RollupMarkdownRenderer';
+import { DailyRollupNoteWriter, type DailyRollupVaultAdapter } from '../../../src/infrastructure/obsidian/DailyRollupNoteWriter';
 
 const settings: DailyRollupSettings = {
   autoGenerateOnFirstSyncOfDay: false,
@@ -34,7 +35,7 @@ test('DailyRollupGenerator orchestrates selection, rendering, and writing', asyn
   };
   const renderer = {
     render: (input: { readonly date: string; readonly findings: readonly RollupFinding[]; }) => {
-      calls.push('render');
+      calls.push('render-fallback');
       assert.equal(input.date, '2026-04-18');
       assert.equal(input.findings, findings);
       return rendered;
@@ -53,8 +54,18 @@ test('DailyRollupGenerator orchestrates selection, rendering, and writing', asyn
       };
     }
   };
+  const asyncTaskCoordinator = {
+    execute: async (_taskKind: 'render-daily-rollup', payload: { readonly date: string; readonly findings: readonly RollupFinding[]; }) => {
+      calls.push('render');
+      assert.equal(payload.date, '2026-04-18');
+      assert.equal(payload.findings, findings);
+      return {
+        document: rendered
+      };
+    }
+  };
 
-  const result = await new DailyRollupGenerator(selector, renderer, writer).execute({
+  const result = await new DailyRollupGenerator(selector, renderer, writer, asyncTaskCoordinator as never).execute({
     affectedProjectsByVulnerabilityRef: new Map(),
     date: '2026-04-18',
     settings,
@@ -65,4 +76,105 @@ test('DailyRollupGenerator orchestrates selection, rendering, and writing', asyn
   assert.deepEqual(calls, ['select', 'render', 'write']);
   assert.equal(result.findingsCount, 0);
   assert.equal(result.path, 'VulnDash Briefings/VulnDash Briefing 2026-04-18.md');
+});
+
+class InMemoryRollupVault implements DailyRollupVaultAdapter {
+  public readonly createdFiles: string[] = [];
+  public readonly createdFolders: string[] = [];
+  public readonly writes: string[] = [];
+
+  public constructor(
+    private readonly entries = new Map<string, string>()
+  ) {}
+
+  public async create(path: string, content: string): Promise<void> {
+    this.createdFiles.push(path);
+    this.entries.set(path, content);
+  }
+
+  public async createFolder(path: string): Promise<void> {
+    this.createdFolders.push(path);
+    this.entries.set(path, '__folder__');
+  }
+
+  public async exists(path: string): Promise<boolean> {
+    return this.entries.has(path);
+  }
+
+  public async read(path: string): Promise<string> {
+    const content = this.entries.get(path);
+    if (content === undefined) {
+      throw new Error('ENOENT');
+    }
+
+    return content;
+  }
+
+  public async write(path: string, content: string): Promise<void> {
+    this.writes.push(path);
+    this.entries.set(path, content);
+  }
+
+  public get(path: string): string | undefined {
+    return this.entries.get(path);
+  }
+}
+
+const createRenderedDocument = (): RenderedDailyRollup => ({
+  analystNotesHeading: '## Analyst Notes',
+  analystNotesPlaceholder: '- Add analyst notes, escalation context, and follow-up decisions here.',
+  managedSections: [{
+    content: '## Findings Overview\n\n- Critical issue',
+    key: 'daily-rollup'
+  }],
+  title: '# VulnDash Briefing 2026-04-18'
+});
+
+test('DailyRollupNoteWriter creates a new rollup note when one does not exist', async () => {
+  const vault = new InMemoryRollupVault();
+  const writer = new DailyRollupNoteWriter(vault);
+
+  const result = await writer.write({
+    date: '2026-04-18',
+    document: createRenderedDocument(),
+    folderPath: 'briefings/daily'
+  });
+
+  assert.equal(result.created, true);
+  assert.equal(result.path, 'briefings/daily/VulnDash Briefing 2026-04-18.md');
+  assert.deepEqual(vault.createdFolders, ['briefings', 'briefings/daily']);
+  assert.deepEqual(vault.createdFiles, ['briefings/daily/VulnDash Briefing 2026-04-18.md']);
+  assert.equal(vault.get(result.path), result.content);
+});
+
+test('DailyRollupNoteWriter updates an existing rollup note while preserving analyst notes', async () => {
+  const notePath = 'briefings/daily/VulnDash Briefing 2026-04-18.md';
+  const vault = new InMemoryRollupVault(new Map<string, string>([
+    ['briefings', '__folder__'],
+    ['briefings/daily', '__folder__'],
+    [notePath, [
+      '# VulnDash Briefing 2026-04-18',
+      '',
+      '## Analyst Notes',
+      '',
+      '- Existing analyst note',
+      '',
+      '<!-- VULNDASH:SECTION daily-rollup START -->',
+      'Old content',
+      '<!-- VULNDASH:SECTION daily-rollup END -->'
+    ].join('\n')]
+  ]));
+  const writer = new DailyRollupNoteWriter(vault);
+
+  const result = await writer.write({
+    date: '2026-04-18',
+    document: createRenderedDocument(),
+    folderPath: 'briefings/daily'
+  });
+
+  assert.equal(result.created, false);
+  assert.deepEqual(vault.createdFiles, []);
+  assert.deepEqual(vault.writes, [notePath]);
+  assert.match(result.content, /Existing analyst note/);
+  assert.match(result.content, /Critical issue/);
 });

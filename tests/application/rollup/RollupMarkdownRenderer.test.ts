@@ -38,7 +38,7 @@ const createFinding = (): RollupFinding => ({
   }
 });
 
-test('RollupMarkdownRenderer produces wiki-linked project sections and markdown task action items', () => {
+test('RollupMarkdownRenderer produces wiki-linked project sections and selection rationale', () => {
   const renderer = new RollupMarkdownRenderer();
   const rendered = renderer.render({
     date: '2026-04-18',
@@ -48,9 +48,9 @@ test('RollupMarkdownRenderer produces wiki-linked project sections and markdown 
 
   assert.equal(rendered.title, '# VulnDash Briefing 2026-04-18');
   assert.match(markdown, /\[\[Projects\/Portal\|Portal Platform\]\]/);
-  assert.match(markdown, /- \[ \] \[\[Projects\/Portal\|Portal Platform\]\] assess CVE-2026-3000/);
-  assert.match(markdown, /## Unmapped Findings/);
-  assert.match(markdown, /Ticket: SEC-123/);
+  assert.match(markdown, /#### Selection Rationale/);
+  assert.match(markdown, /Gateway SBOM/);
+  assert.match(markdown, /ticket: SEC-123/);
   assert.equal(rendered.analystNotesHeading, '## Analyst Notes');
 });
 

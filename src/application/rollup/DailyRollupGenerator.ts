@@ -1,8 +1,13 @@
 import { DailyRollupPolicy } from '../../domain/rollup/DailyRollupPolicy';
 import type { AffectedProjectResolution } from '../../domain/correlation/AffectedProjectResolution';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
+import { AsyncTaskCoordinator } from '../../infrastructure/async/AsyncTaskCoordinator';
 import type { DailyRollupSettings } from '../use-cases/types';
-import { RollupMarkdownRenderer, type RenderedDailyRollup } from './RollupMarkdownRenderer';
+import {
+  RollupMarkdownRenderer,
+  type RenderDailyRollupInput,
+  type RenderedDailyRollup
+} from './RollupMarkdownRenderer';
 import type { RollupTriageSnapshot } from './SelectRollupFindings';
 import { SelectRollupFindings } from './SelectRollupFindings';
 
@@ -29,7 +34,8 @@ export class DailyRollupGenerator {
   public constructor(
     private readonly selectFindings: SelectRollupFindings,
     private readonly renderer: RollupMarkdownRenderer,
-    private readonly writer: DailyRollupWriter
+    private readonly writer: DailyRollupWriter,
+    private readonly asyncTaskCoordinator = new AsyncTaskCoordinator()
   ) {}
 
   public async execute(input: {
@@ -49,7 +55,7 @@ export class DailyRollupGenerator {
       triageByCacheKey: input.triageByCacheKey,
       vulnerabilities: input.vulnerabilities
     });
-    const document = this.renderer.render({
+    const document = await this.renderDocument({
       date: input.date,
       findings
     });
@@ -65,5 +71,20 @@ export class DailyRollupGenerator {
       findingsCount: findings.length,
       path: written.path
     };
+  }
+
+  private async renderDocument(input: RenderDailyRollupInput): Promise<RenderedDailyRollup> {
+    const rendered = await this.asyncTaskCoordinator.execute('render-daily-rollup', input, {
+      fallback: async (payload, scheduler) => {
+        await scheduler.yieldToHost({ timeoutMs: 16 });
+
+        return {
+          document: this.renderer.render(payload)
+        };
+      },
+      preferWorker: input.findings.length > 0
+    });
+
+    return rendered.document;
   }
 }
