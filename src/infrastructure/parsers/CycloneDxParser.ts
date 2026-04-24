@@ -8,7 +8,7 @@ import type {
 } from '../../domain/sbom/types';
 import { PurlNormalizer } from '../../domain/services/PurlNormalizer';
 import { getHighestSeverity, getSeverityRank } from '../../domain/value-objects/Severity';
-import type { ParseSbomJsonOptions } from './index';
+import type { ParseSbomOptions, SbomParser } from './SbomParser';
 
 interface CycloneDxBom {
   bomFormat?: unknown;
@@ -379,7 +379,7 @@ export const isCycloneDxJson = (value: unknown): value is CycloneDxBom => {
 
 export const parseCycloneDxJson = (
   bom: CycloneDxBom,
-  options: ParseSbomJsonOptions
+  options: ParseSbomOptions
 ): NormalizedSbomDocument => {
   const vulnerabilityIndex = buildVulnerabilityIndex(bom);
   const components = flattenComponents(bom).map((component, index) => {
@@ -466,3 +466,21 @@ export const parseCycloneDxJson = (
     sourcePath: options.source.path
   };
 };
+
+export class CycloneDxParser implements SbomParser {
+  public readonly format = 'cyclonedx' as const;
+
+  public canParse(document: unknown): boolean {
+    return isCycloneDxJson(document);
+  }
+
+  public parse(document: unknown, options: ParseSbomOptions): NormalizedSbomDocument {
+    if (!isCycloneDxJson(document)) {
+      throw new Error('CycloneDX parser received an unsupported SBOM document.');
+    }
+
+    return parseCycloneDxJson(document, options);
+  }
+}
+
+export const cycloneDxParser = new CycloneDxParser();
