@@ -59,7 +59,7 @@ import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from '../views/VulnDashView';
 import { GenerateDailyRollupCommand } from '../commands/GenerateDailyRollupCommand';
 import { VulnDashSettingTab } from '../settings/VulnDashSettingsTab';
-import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from '../../infrastructure/security/crypto';
+import { CredentialStore } from '../../infrastructure/security/CredentialStore';
 
 const areStringListsEqual = (left: string[], right: string[]): boolean =>
   left.length === right.length && left.every((value, index) => value === right[index]);
@@ -92,6 +92,7 @@ export default class VulnDashPlugin extends Plugin {
   private syncServiceGeneration = 0;
   private dataProcessingChain: Promise<void> = Promise.resolve();
   private persistentCacheServices: PersistentCacheServices | null = null;
+  private readonly credentialStore = new CredentialStore();
   private loadedPluginData: LoadedPluginData | null = null;
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
@@ -1059,19 +1060,19 @@ export default class VulnDashPlugin extends Plugin {
     this.loadedPluginData = loadedSettings;
     const loadedNvd = loadedSettings?.nvdApiKey ?? '';
     const loadedGithub = loadedSettings?.githubToken ?? '';
-    const nvdSecret = await this.loadSecret(loadedNvd);
-    const githubSecret = await this.loadSecret(loadedGithub);
+    const nvdSecret = await this.credentialStore.read(loadedNvd);
+    const githubSecret = await this.credentialStore.read(loadedGithub);
 
     const loadedFeeds = await Promise.all((loadedSettings?.feeds ?? []).map(async (feed) => {
       if (feed.type === FEED_TYPES.NVD) {
-        const apiKeySecret = await this.loadSecret(feed.apiKey ?? '');
+        const apiKeySecret = await this.credentialStore.read(feed.apiKey ?? '');
         return {
           ...feed,
           apiKey: apiKeySecret.value
         };
       }
 
-      const tokenSecret = await this.loadSecret(feed.token ?? '');
+      const tokenSecret = await this.credentialStore.read(feed.token ?? '');
       return {
         ...feed,
         token: tokenSecret.value
@@ -1097,19 +1098,19 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private async saveSettings(): Promise<void> {
-    const encryptedNvd = await this.serializeSecret(this.settings.nvdApiKey);
-    const encryptedGithub = await this.serializeSecret(this.settings.githubToken);
+    const encryptedNvd = await this.credentialStore.serialize(this.settings.nvdApiKey);
+    const encryptedGithub = await this.credentialStore.serialize(this.settings.githubToken);
     const feeds = await Promise.all(this.settings.feeds.map(async (feed) => {
       if (feed.type === FEED_TYPES.NVD) {
         return {
           ...feed,
-          apiKey: await this.serializeSecret(feed.apiKey ?? '')
+          apiKey: await this.credentialStore.serialize(feed.apiKey ?? '')
         };
       }
       if (feed.token) {
         return {
           ...feed,
-          token: await this.serializeSecret(feed.token)
+          token: await this.credentialStore.serialize(feed.token)
         };
       }
       return { ...feed };
@@ -1124,35 +1125,6 @@ export default class VulnDashPlugin extends Plugin {
     }, feeds);
 
     await this.saveData(dataToSave);
-  }
-
-  private async serializeSecret(secret: string): Promise<string> {
-    if (!secret) {
-      return '';
-    }
-    const encrypted = await encryptSecret(secret);
-    if (!encrypted) {
-      return '';
-    }
-    return `${ENCRYPTED_SECRET_PREFIX}${encrypted}`;
-  }
-
-  private async loadSecret(secret: string): Promise<{ value: string; needsMigration: boolean; decryptionFailed: boolean }> {
-    if (!secret) {
-      return { value: '', needsMigration: false, decryptionFailed: false };
-    }
-
-    if (!secret.startsWith(ENCRYPTED_SECRET_PREFIX)) {
-      return { value: secret, needsMigration: true, decryptionFailed: false };
-    }
-
-    const encryptedPayload = secret.slice(ENCRYPTED_SECRET_PREFIX.length);
-    const decrypted = await decryptSecret(encryptedPayload);
-    if (decrypted.status === 'success') {
-      return { value: decrypted.value, needsMigration: false, decryptionFailed: false };
-    }
-
-    return { value: '', needsMigration: false, decryptionFailed: true };
   }
 
   private async applySettings(
