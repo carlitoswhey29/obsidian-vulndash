@@ -1,10 +1,10 @@
 import type {
   NormalizedComponent,
-  NormalizedDataviewFields,
+  NormalizedComponentVulnerabilitySummary,
   NormalizedSbomDocument
 } from '../../domain/sbom/types';
 import { PurlNormalizer } from '../../domain/services/PurlNormalizer';
-import type { ParseSbomJsonOptions } from './index';
+import type { ParseSbomOptions, SbomParser } from './SbomParser';
 
 interface SpdxDocument {
   SPDXID?: unknown;
@@ -41,8 +41,8 @@ const getTrimmedString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const buildEmptyDataviewFields = (): NormalizedDataviewFields => ({
-  cweList: [],
+const buildEmptyVulnerabilitySummary = (): NormalizedComponentVulnerabilitySummary => ({
+  cweIds: [],
   severities: [],
   vulnerabilityCount: 0,
   vulnerabilityIds: []
@@ -96,7 +96,7 @@ export const isSpdxJson = (value: unknown): value is SpdxDocument => {
 
 export const parseSpdxJson = (
   document: SpdxDocument,
-  options: ParseSbomJsonOptions
+  options: ParseSbomOptions
 ): NormalizedSbomDocument => {
   const packages = Array.isArray(document.packages)
     ? document.packages.filter(isRecord) as SpdxPackage[]
@@ -111,9 +111,9 @@ export const parseSpdxJson = (
 
     const normalized: NormalizedComponent = {
       cweGroups: [],
-      dataview: buildEmptyDataviewFields(),
       id: getTrimmedString(pkg.SPDXID) ?? `${name}@${version ?? 'unknown'}#${index}`,
       name,
+      vulnerabilitySummary: buildEmptyVulnerabilitySummary(),
       vulnerabilities: [],
       vulnerabilityCount: 0
     };
@@ -168,3 +168,21 @@ export const parseSpdxJson = (
     sourcePath: options.source.path
   };
 };
+
+export class SpdxParser implements SbomParser {
+  public readonly format = 'spdx' as const;
+
+  public canParse(document: unknown): boolean {
+    return isSpdxJson(document);
+  }
+
+  public parse(document: unknown, options: ParseSbomOptions): NormalizedSbomDocument {
+    if (!isSpdxJson(document)) {
+      throw new Error('SPDX parser received an unsupported SBOM document.');
+    }
+
+    return parseSpdxJson(document, options);
+  }
+}
+
+export const spdxParser = new SpdxParser();

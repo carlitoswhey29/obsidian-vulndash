@@ -1,5 +1,5 @@
 import { normalizePath } from 'obsidian';
-import { parseSbomJson } from '../../infrastructure/parsers';
+import { SbomParserFactory } from '../../infrastructure/parsers/SbomParserFactory';
 import type { NormalizedSbomDocument } from '../../domain/sbom/types';
 import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
 import { AsyncTaskCoordinator } from '../../infrastructure/async/AsyncTaskCoordinator';
@@ -60,6 +60,7 @@ export interface SbomImportServiceOptions {
   readonly asyncTaskCoordinator?: AsyncTaskCoordinator;
   readonly cooperativeScheduler?: CooperativeScheduler;
   readonly notePathItemsPerYield?: number;
+  readonly parserFactory?: Pick<SbomParserFactory, 'parse'>;
   readonly runtimeComponentItemsPerYield?: number;
   readonly workerMinimumBytes?: number;
 }
@@ -74,6 +75,7 @@ export class SbomImportService {
   private readonly nameNormalizer: ProductNameNormalizer;
   private readonly notePathItemsPerYield: number;
   private readonly notePathResolverFactory: SbomComponentNotePathResolverFactory | null;
+  private readonly parserFactory: Pick<SbomParserFactory, 'parse'>;
   private readonly reader: SbomReader;
   private readonly runtimeCache = new Map<string, RuntimeSbomState>();
   private readonly runtimeComponentItemsPerYield: number;
@@ -91,6 +93,7 @@ export class SbomImportService {
     this.asyncTaskCoordinator = options.asyncTaskCoordinator ?? new AsyncTaskCoordinator();
     this.cooperativeScheduler = options.cooperativeScheduler ?? new CooperativeScheduler();
     this.notePathItemsPerYield = options.notePathItemsPerYield ?? DEFAULT_NOTE_PATH_ITEMS_PER_YIELD;
+    this.parserFactory = options.parserFactory ?? new SbomParserFactory();
     this.runtimeComponentItemsPerYield = options.runtimeComponentItemsPerYield ?? DEFAULT_RUNTIME_COMPONENT_ITEMS_PER_YIELD;
     this.workerMinimumBytes = options.workerMinimumBytes ?? DEFAULT_SBOM_WORKER_MINIMUM_BYTES;
   }
@@ -430,7 +433,7 @@ export class SbomImportService {
         }
 
         return {
-          document: parseSbomJson(parsed, { source: fallbackSource })
+          document: this.parserFactory.parse(parsed, { source: fallbackSource })
         };
       },
       preferWorker: raw.length >= this.workerMinimumBytes

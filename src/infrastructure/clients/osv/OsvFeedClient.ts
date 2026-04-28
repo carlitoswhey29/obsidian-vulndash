@@ -6,6 +6,7 @@ import type {
   VulnerabilityFeed
 } from '../../../application/ports/VulnerabilityFeed';
 import type { Vulnerability } from '../../../domain/entities/Vulnerability';
+import { BUILT_IN_FEEDS } from '../../../domain/feeds/FeedTypes';
 import { PurlNormalizer } from '../../../domain/services/PurlNormalizer';
 import {
   buildVulnerabilityCacheKey,
@@ -22,9 +23,6 @@ import type {
   OsvBatchResponse,
   OsvVulnerabilityPayload
 } from './OsvTypes';
-
-const OSV_BATCH_ENDPOINT = 'https://api.osv.dev/v1/querybatch';
-const MAX_OSV_BATCH_SIZE = 1000;
 
 type CacheFreshness = 'error-state' | 'fresh-negative' | 'fresh-positive' | 'missing' | 'stale';
 
@@ -323,7 +321,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
       };
     }
 
-    const chunks = this.chunkPurls(purls, MAX_OSV_BATCH_SIZE);
+    const chunks = this.chunkPurls(purls, this.config.osvMaxBatchSize);
     const chunkResults = await this.processWithConcurrency(chunks, this.config.maxConcurrentBatches, async (chunk) =>
       this.fetchChunk(chunk, signal)
     );
@@ -448,7 +446,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
         context: {
           provider: this.name,
           operation: 'fetchVulnerabilities',
-          url: OSV_BATCH_ENDPOINT
+          url: this.config.osvEndpointUrl
         },
         headers: {
           Accept: 'application/json',
@@ -545,7 +543,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
     for (const [purl, vulnerabilities] of resultsByPurl) {
       records.push({
         purl,
-        source: 'osv',
+        source: BUILT_IN_FEEDS.OSV.type,
         lastQueriedAtMs: queriedAtMs,
         lastSeenInWorkspaceAtMs: seenAtMs,
         resultState: vulnerabilities.length > 0 ? 'hit' : 'miss',
@@ -566,7 +564,7 @@ export class OsvFeedClient extends ClientBase implements VulnerabilityFeed {
   ): readonly PersistedComponentQueryRecord[] {
     return purls.map((purl) => ({
       purl,
-      source: 'osv',
+      source: BUILT_IN_FEEDS.OSV.type,
       lastQueriedAtMs: queriedAtMs,
       lastSeenInWorkspaceAtMs: seenAtMs,
       resultState: 'error',

@@ -1,13 +1,14 @@
 import type {
   NormalizedComponent,
+  NormalizedComponentVulnerabilitySummary,
   NormalizedCweGroup,
-  NormalizedDataviewFields,
   NormalizedSbomDocument,
   NormalizedSeverity,
   NormalizedVulnerability
 } from '../../domain/sbom/types';
 import { PurlNormalizer } from '../../domain/services/PurlNormalizer';
-import type { ParseSbomJsonOptions } from './index';
+import { getHighestSeverity, getSeverityRank } from '../../domain/value-objects/Severity';
+import type { ParseSbomOptions, SbomParser } from './SbomParser';
 
 interface CycloneDxBom {
   bomFormat?: unknown;
@@ -110,23 +111,6 @@ const normalizeSeverity = (severity: unknown): NormalizedSeverity | undefined =>
   }
 };
 
-const getSeverityRank = (severity: NormalizedSeverity | undefined): number => {
-  switch (severity) {
-    case 'critical':
-      return 5;
-    case 'high':
-      return 4;
-    case 'medium':
-      return 3;
-    case 'low':
-      return 2;
-    case 'informational':
-      return 1;
-    default:
-      return 0;
-  }
-};
-
 const compareVulnerabilities = (
   left: NormalizedVulnerability,
   right: NormalizedVulnerability
@@ -143,20 +127,6 @@ const compareVulnerabilities = (
   }
 
   return left.id.localeCompare(right.id);
-};
-
-const getHighestSeverity = (
-  vulnerabilities: readonly NormalizedVulnerability[]
-): NormalizedSeverity | undefined => {
-  let highest: NormalizedSeverity | undefined;
-
-  for (const vulnerability of vulnerabilities) {
-    if (getSeverityRank(vulnerability.severity) > getSeverityRank(highest)) {
-      highest = vulnerability.severity;
-    }
-  }
-
-  return highest;
 };
 
 const buildCweGroups = (
@@ -181,15 +151,15 @@ const buildCweGroups = (
     .sort((left, right) => left.cwe - right.cwe);
 };
 
-const buildDataviewFields = (
+const buildVulnerabilitySummary = (
   vulnerabilities: readonly NormalizedVulnerability[]
-): NormalizedDataviewFields => {
-  const cweList = new Set<string>();
+): NormalizedComponentVulnerabilitySummary => {
+  const cweIds = new Set<number>();
   const severities = new Set<NormalizedSeverity>();
 
   for (const vulnerability of vulnerabilities) {
     for (const cwe of vulnerability.cwes) {
-      cweList.add(`CWE-${cwe}`);
+      cweIds.add(cwe);
     }
 
     if (vulnerability.severity) {
@@ -197,23 +167,23 @@ const buildDataviewFields = (
     }
   }
 
-  const dataview: NormalizedDataviewFields = {
-    cweList: Array.from(cweList).sort((left, right) => left.localeCompare(right)),
+  const summary: NormalizedComponentVulnerabilitySummary = {
+    cweIds: Array.from(cweIds).sort((left, right) => left - right),
     severities: Array.from(severities).sort((left, right) => getSeverityRank(right) - getSeverityRank(left)),
     vulnerabilityCount: vulnerabilities.length,
     vulnerabilityIds: vulnerabilities.map((vulnerability) => vulnerability.id)
   };
 
-  const highestSeverity = getHighestSeverity(vulnerabilities);
+  const highestSeverity = getHighestSeverity(vulnerabilities.map((vulnerability) => vulnerability.severity));
   if (highestSeverity) {
-    dataview.highestSeverity = highestSeverity;
+    summary.highestSeverity = highestSeverity;
   }
 
-  return dataview;
+  return summary;
 };
 
-const buildEmptyDataviewFields = (): NormalizedDataviewFields => ({
-  cweList: [],
+const buildEmptyVulnerabilitySummary = (): NormalizedComponentVulnerabilitySummary => ({
+  cweIds: [],
   severities: [],
   vulnerabilityCount: 0,
   vulnerabilityIds: []
@@ -409,7 +379,7 @@ export const isCycloneDxJson = (value: unknown): value is CycloneDxBom => {
 
 export const parseCycloneDxJson = (
   bom: CycloneDxBom,
-  options: ParseSbomJsonOptions
+  options: ParseSbomOptions
 ): NormalizedSbomDocument => {
   const vulnerabilityIndex = buildVulnerabilityIndex(bom);
   const components = flattenComponents(bom).map((component, index) => {
@@ -419,7 +389,10 @@ export const parseCycloneDxJson = (
     const vulnerabilities = componentRef
       ? [...(vulnerabilityIndex.get(componentRef) ?? [])]
       : [];
-    const highestSeverity = getHighestSeverity(vulnerabilities);
+    const vulnerabilitySummary = vulnerabilities.length > 0
+      ? buildVulnerabilitySummary(vulnerabilities)
+      : buildEmptyVulnerabilitySummary();
+    const highestSeverity = vulnerabilitySummary.highestSeverity;
     const supplier = isRecord(component.supplier)
       ? getTrimmedString((component.supplier as CycloneDxSupplier).name)
       : undefined;
@@ -428,9 +401,9 @@ export const parseCycloneDxJson = (
 
     const normalized: NormalizedComponent = {
       cweGroups: buildCweGroups(vulnerabilities),
-      dataview: vulnerabilities.length > 0 ? buildDataviewFields(vulnerabilities) : buildEmptyDataviewFields(),
       id: componentRef ?? `${name}@${version ?? 'unknown'}#${index}`,
       name,
+      vulnerabilitySummary,
       vulnerabilities,
       vulnerabilityCount: vulnerabilities.length
     };
@@ -493,3 +466,21 @@ export const parseCycloneDxJson = (
     sourcePath: options.source.path
   };
 };
+
+export class CycloneDxParser implements SbomParser {
+  public readonly format = 'cyclonedx' as const;
+
+  public canParse(document: unknown): boolean {
+    return isCycloneDxJson(document);
+  }
+
+  public parse(document: unknown, options: ParseSbomOptions): NormalizedSbomDocument {
+    if (!isCycloneDxJson(document)) {
+      throw new Error('CycloneDX parser received an unsupported SBOM document.');
+    }
+
+    return parseCycloneDxJson(document, options);
+  }
+}
+
+export const cycloneDxParser = new CycloneDxParser();

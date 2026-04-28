@@ -1,5 +1,7 @@
-import { parseSbomJson } from '../parsers';
+import { SbomParserFactory } from '../parsers/SbomParserFactory';
 import type { AsyncTaskRequestMessage, AsyncTaskResponseMessage, ParseSbomTaskRequest } from '../async/AsyncTaskTypes';
+
+const sbomParserFactory = new SbomParserFactory();
 
 const toErrorMessage = (error: unknown): string => {
   if (error instanceof Error && error.message.trim()) {
@@ -18,7 +20,7 @@ const parseSbom = (payload: ParseSbomTaskRequest): AsyncTaskResponseMessage<'par
   return {
     requestId: -1,
     result: {
-      document: parseSbomJson(parsed, { source: payload.source })
+      document: sbomParserFactory.parse(parsed, { source: payload.source })
     },
     success: true,
     taskKind: 'parse-sbom'

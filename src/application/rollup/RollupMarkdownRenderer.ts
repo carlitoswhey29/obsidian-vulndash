@@ -18,6 +18,11 @@ export interface RenderedDailyRollup {
   readonly title: string;
 }
 
+export interface RenderDailyRollupInput {
+  readonly date: string;
+  readonly findings: readonly RollupFinding[];
+}
+
 const asSentence = (value: string): string => {
   const normalized = value.trim();
   if (!normalized) {
@@ -46,10 +51,7 @@ export class RollupMarkdownRenderer {
     private readonly composer: DailyRollupMarkdownComposer = new DailyRollupMarkdownComposer()
   ) {}
 
-  public render(input: {
-    readonly date: string;
-    readonly findings: readonly RollupFinding[];
-  }): RenderedDailyRollup {
+  public render(input: RenderDailyRollupInput): RenderedDailyRollup {
     const composerInput = this.mapToComposerInput(input.date, input.findings);
     const composedMarkdown = this.composer.compose(composerInput);
     const title = `# ${composerInput.title ?? `Daily Rollup - ${input.date}`}`;

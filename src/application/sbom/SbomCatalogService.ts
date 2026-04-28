@@ -1,30 +1,13 @@
 import type {
   NormalizedSbomDocument,
-  NormalizedSeverity
 } from '../../domain/sbom/types';
+import { getSeverityRank } from '../../domain/value-objects/Severity';
 import { ComponentIdentityService } from './ComponentIdentityService';
 import { ComponentMergeService } from './ComponentMergeService';
 import type { ComponentCatalog, TrackedComponent } from './types';
 
 const normalizeToken = (value: string): string =>
   value.trim().replace(/\s+/g, ' ').toLowerCase();
-
-const getSeverityRank = (severity: NormalizedSeverity | undefined): number => {
-  switch (severity) {
-    case 'critical':
-      return 5;
-    case 'high':
-      return 4;
-    case 'medium':
-      return 3;
-    case 'low':
-      return 2;
-    case 'informational':
-      return 1;
-    default:
-      return 0;
-  }
-};
 
 const compareDocuments = (
   left: NormalizedSbomDocument,

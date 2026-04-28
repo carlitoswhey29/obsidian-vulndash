@@ -1,6 +1,7 @@
 import type { VulnerabilityFeed } from '../../application/ports/VulnerabilityFeed';
 import type { FeedConfig, SyncControls } from '../../application/use-cases/types';
 import type { IHttpClient } from '../../application/ports/HttpClient';
+import { FEED_TYPES } from '../../domain/feeds/FeedTypes';
 import { GitHubAdvisoryClient } from '../clients/github/GitHubAdvisoryClient';
 import { GitHubRepoClient } from '../clients/github/GitHubRepoClient';
 import { GenericJsonFeedClient } from '../clients/generic/GenericJsonFeedClient';
@@ -27,7 +28,7 @@ export const buildFeedsFromConfig = (
     }
 
     switch (config.type) {
-      case 'nvd': {
+      case FEED_TYPES.NVD: {
         feeds.push(new NvdClient(
           httpClient,
           config.id,
@@ -38,11 +39,11 @@ export const buildFeedsFromConfig = (
         ));
         break;
       }
-      case 'github_advisory': {
+      case FEED_TYPES.GITHUB_ADVISORY: {
         feeds.push(new GitHubAdvisoryClient(httpClient, config.id, config.name, config.token ?? '', controls));
         break;
       }
-      case 'github_repo': {
+      case FEED_TYPES.GITHUB_REPO: {
         const repoPath = config.repoPath.trim();
         if (!repoPath) {
           console.warn('[vulndash.feed.invalid]', { id: config.id, type: config.type, reason: 'missing_repo_path' });
@@ -51,7 +52,7 @@ export const buildFeedsFromConfig = (
         feeds.push(new GitHubRepoClient(httpClient, config.id, config.name, config.token ?? '', repoPath, controls));
         break;
       }
-      case 'generic_json': {
+      case FEED_TYPES.GENERIC_JSON: {
         const url = config.url.trim();
         if (!url) {
           console.warn('[vulndash.feed.invalid]', { id: config.id, type: config.type, reason: 'missing_url' });
@@ -68,7 +69,7 @@ export const buildFeedsFromConfig = (
         ));
         break;
       }
-      case 'osv': {
+      case FEED_TYPES.OSV: {
         if (!dependencies.osvQueryCache || !dependencies.getPurls) {
           console.warn('[vulndash.feed.invalid]', { id: config.id, type: config.type, reason: 'missing_osv_dependencies' });
           break;

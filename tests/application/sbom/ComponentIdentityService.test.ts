@@ -7,16 +7,16 @@ const service = new ComponentIdentityService();
 
 const createComponent = (overrides: Partial<NormalizedComponent> = {}): NormalizedComponent => ({
   cweGroups: [],
-  dataview: {
-    cweList: [],
-    severities: [],
-    vulnerabilityCount: 0,
-    vulnerabilityIds: []
-  },
   id: 'component-1',
   name: 'Example Component',
   vulnerabilities: [],
   vulnerabilityCount: 0,
+  vulnerabilitySummary: {
+    cweIds: [],
+    severities: [],
+    vulnerabilityCount: 0,
+    vulnerabilityIds: []
+  },
   ...overrides
 });
 

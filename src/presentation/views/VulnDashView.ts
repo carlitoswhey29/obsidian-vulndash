@@ -1,14 +1,18 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
 import type { ChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
 import { buildVulnerabilityCacheKey, createEmptyChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
-import { FilterByAffectedProject, type AffectedProjectFilter } from '../../application/correlation/FilterByAffectedProject';
+import {
+  ALL_AFFECTED_PROJECT_FILTER,
+  UNMAPPED_AFFECTED_PROJECT_FILTER,
+  type AffectedProjectFilter
+} from '../../application/correlation/FilterByAffectedProject';
 import {
   DEFAULT_DASHBOARD_DATE_RANGE,
   cloneDashboardDateRangeSelection,
-  filterVulnerabilitiesByDateWindow,
   resolveDashboardDateRangeSelection,
   type DashboardDateRangeSelection
 } from '../../application/dashboard/PublishedDateWindow';
+import { VulnQueryEngine } from '../../application/query/VulnQueryEngine';
 import type { ComponentInventoryWorkspaceSnapshot } from '../../application/sbom/types';
 import type { TriageFilterMode } from '../../application/triage/FilterByTriageState';
 import type { DashboardDateField, DashboardSortOrder, VulnDashSettings } from '../../application/use-cases/types';
@@ -21,7 +25,6 @@ import type { Vulnerability } from '../../domain/entities/Vulnerability';
 import { buildTriageCorrelationKeyForVulnerability } from '../../domain/triage/TriageCorrelation';
 import type { TriageRecord } from '../../domain/triage/TriageRecord';
 import { DEFAULT_TRIAGE_STATE, type TriageState } from '../../domain/triage/TriageState';
-import { severityOrder } from '../../domain/value-objects/Severity';
 import { ComponentDetailsRenderer } from '../components/ComponentDetailPanel';
 import { ComponentInventoryView } from '../components/ComponentInventoryView';
 import { TriageFilterControl } from '../components/TriageFilterControl';
@@ -45,10 +48,6 @@ interface VulnerabilityTriageViewState {
 const EMPTY_CHANGE_HINTS = createEmptyChangedVulnerabilityIds();
 const ALL_AFFECTED_PROJECT_FILTER_VALUE = '__all__';
 const UNMAPPED_AFFECTED_PROJECT_FILTER_VALUE = '__unmapped__';
-
-const compareStrings = (left: string, right: string): number => left.localeCompare(right);
-
-const compareNumbers = (left: number, right: number): number => left - right;
 
 const createSingleUpdatedHint = (key: string): ChangedVulnerabilityIds => ({
   added: [],
@@ -95,13 +94,13 @@ export class VulnDashView extends ItemView {
   private sortKey: SortKey = 'publishedAt';
   private tabButtons = new Map<VulnDashTab, HTMLButtonElement>();
   private readonly triageByVulnerabilityKey = new Map<string, VulnerabilityTriageViewState>();
-  private readonly affectedProjectFilter = new FilterByAffectedProject();
   private readonly relationshipNormalizer = new RelationshipNormalizer();
   private readonly triageFilterControl = new TriageFilterControl({
     onChange: (triageFilter) => {
       void this.onTriageFilterChange(triageFilter);
     }
   });
+  private readonly vulnQueryEngine = new VulnQueryEngine();
   private colorCodedSeverity = true;
   private columnVisibility: VulnDashSettings['columnVisibility'] = {
     id: true,
@@ -409,26 +408,23 @@ export class VulnDashView extends ItemView {
   }
 
   private getFilteredVulnerabilities(): Vulnerability[] {
-    let data = this.getSorted();
-    const dateRangeResolution = resolveDashboardDateRangeSelection(this.appliedDateRangeSelection, this.getNow());
-    if (dateRangeResolution.window) {
-      data = filterVulnerabilitiesByDateWindow(data, dateRangeResolution.window, this.dashboardDateField);
-    }
-    data = this.affectedProjectFilter.execute(
-      data,
-      this.getSelectedAffectedProjectFilter(),
-      (vulnerability) => this.getAffectedProjectResolution(vulnerability)
-    );
-
-    if (this.localSearchQuery) {
-      data = data.filter((vulnerability) =>
-        vulnerability.title.toLowerCase().includes(this.localSearchQuery)
-        || vulnerability.id.toLowerCase().includes(this.localSearchQuery)
-        || vulnerability.source.toLowerCase().includes(this.localSearchQuery)
-      );
-    }
-
-    return data.slice(0, this.maxResults);
+    return this.vulnQueryEngine.execute({
+      getAffectedProjectResolution: (vulnerability) => this.getAffectedProjectResolution(vulnerability),
+      vulnerabilities: this.vulnerabilities
+    }, {
+      affectedProject: this.getSelectedAffectedProjectFilter(),
+      date: {
+        field: this.dashboardDateField,
+        now: this.getNow(),
+        range: this.appliedDateRangeSelection
+      },
+      limit: this.maxResults,
+      searchText: this.localSearchQuery,
+      sort: {
+        direction: this.sortDesc ? 'desc' : 'asc',
+        field: this.sortKey
+      }
+    });
   }
 
   private getAffectedProjectFilterOptions(): Array<{ label: string; value: string; }> {
@@ -478,28 +474,17 @@ export class VulnDashView extends ItemView {
 
   private getSelectedAffectedProjectFilter(): AffectedProjectFilter {
     if (this.affectedProjectFilterValue === ALL_AFFECTED_PROJECT_FILTER_VALUE) {
-      return { kind: 'all' };
+      return ALL_AFFECTED_PROJECT_FILTER;
     }
 
     if (this.affectedProjectFilterValue === UNMAPPED_AFFECTED_PROJECT_FILTER_VALUE) {
-      return { kind: 'unmapped' };
+      return UNMAPPED_AFFECTED_PROJECT_FILTER;
     }
 
     return {
       kind: 'project',
       notePath: this.affectedProjectFilterValue
     };
-  }
-
-  private getSorted(): Vulnerability[] {
-    return [...this.vulnerabilities].sort((left, right) => {
-      const comparison = this.compareVulnerabilities(left, right, this.sortKey);
-      if (comparison !== 0) {
-        return this.sortDesc ? -comparison : comparison;
-      }
-
-      return 0;
-    });
   }
 
   private getVisibleColumns(): VulnerabilityRowColumn[] {
@@ -773,32 +758,6 @@ export class VulnDashView extends ItemView {
 
     this.dateRangeValidationEl.textContent = '';
     this.dateRangeValidationEl.style.display = 'none';
-  }
-
-  private compareVulnerabilities(left: Vulnerability, right: Vulnerability, sortKey: SortKey): number {
-    const primary = (() => {
-      switch (sortKey) {
-        case 'severity':
-          return compareNumbers(severityOrder[left.severity], severityOrder[right.severity]);
-        case 'cvssScore':
-          return compareNumbers(left.cvssScore, right.cvssScore);
-        case 'id':
-          return compareStrings(left.id, right.id);
-        case 'source':
-          return compareStrings(left.source, right.source);
-        case 'title':
-          return compareStrings(left.title, right.title);
-        case 'publishedAt':
-        default:
-          return compareStrings(left.publishedAt, right.publishedAt);
-      }
-    })();
-
-    if (primary !== 0) {
-      return primary;
-    }
-
-    return compareStrings(this.getVulnerabilityKey(left), this.getVulnerabilityKey(right));
   }
 
   private async refreshVulnerabilityTable(

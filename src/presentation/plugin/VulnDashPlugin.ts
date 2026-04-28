@@ -6,531 +6,63 @@ import {
   TFile,
   WorkspaceLeaf
 } from 'obsidian';
-import { ComponentInventoryService } from '../../application/sbom/ComponentInventoryService';
-import { ComponentPreferenceService } from '../../application/sbom/ComponentPreferenceService';
-import { ComponentVulnerabilityLinkService } from '../../application/sbom/ComponentVulnerabilityLinkService';
-import { RelationshipNormalizer } from '../../application/sbom/RelationshipNormalizer';
-import { SbomCatalogService } from '../../application/sbom/SbomCatalogService';
+import {
+  type PersistentCacheServices,
+  VulnDashAppModule
+} from '../../application/VulnDashAppModule';
 import type {
   ComponentCatalog,
   ComponentInventorySnapshot,
   ComponentInventoryWorkspaceSnapshot
 } from '../../application/sbom/types';
-import { AlertEngine } from '../../application/use-cases/EvaluateAlertsUseCase';
 import type { PipelineEvent } from '../../application/pipeline/PipelineEvents';
 import type { ChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
 import { buildVulnerabilityCacheKey, createEmptyChangedVulnerabilityIds } from '../../application/pipeline/PipelineTypes';
-import { buildFeedsFromConfig } from '../../infrastructure/factories/FeedFactory';
-import { SbomComparisonService, type SbomComparisonResult } from '../../application/use-cases/SbomComparisonService';
-import { SbomFilterMergeService } from '../../application/use-cases/SbomFilterMergeService';
+import type { SbomComparisonResult } from '../../application/use-cases/SbomComparisonService';
 import {
-  SbomImportService,
   type SbomFileChangeStatus,
   type SbomLoadResult,
   type SbomValidationResult
 } from '../../application/use-cases/SbomImportService';
 import { buildFailureNoticeMessage, buildVisibilityDiagnostics, summarizeSyncResults } from '../../application/use-cases/SyncOutcomeDiagnostics';
 import { VulnerabilitySyncService, type SyncOutcome } from '../../application/use-cases/SyncVulnerabilitiesUseCase';
+import {
+  DEFAULT_SETTINGS
+} from '../../application/use-cases/DefaultSettings';
+import {
+  buildPersistedSettingsSnapshot,
+  normalizeImportedSbomConfig,
+  normalizeRuntimeSettings,
+  normalizeSbomOverride,
+  type SettingsMigrationInput
+} from '../../application/settings/SettingsMigrator';
 import type {
-  ColumnVisibility,
-  FeedConfig,
   ImportedSbomConfig,
-  CacheStorageSettings,
-  DailyRollupSettings,
-  OsvFeedConfig,
   ResolvedSbomComponent,
   RuntimeSbomState,
   SbomComponentOverride,
   VulnDashSettings
 } from '../../application/use-cases/types';
 import { buildSbomOverrideKey } from '../../application/use-cases/types';
-import { ResolveAffectedProjects, type ProjectNoteLookupResult } from '../../application/correlation/ResolveAffectedProjects';
+import type { ProjectNoteLookupResult } from '../../application/correlation/ResolveAffectedProjects';
 import { createProjectNoteReference } from '../../domain/correlation/ProjectNoteReference';
 import { createSbomProjectMapping } from '../../domain/correlation/SbomProjectMapping';
 import type { AffectedProjectResolution } from '../../domain/correlation/AffectedProjectResolution';
-import { SbomComponentIndex } from '../../infrastructure/correlation/SbomComponentIndex';
-import { ProjectNoteLookupService, type ProjectNoteOption } from '../../infrastructure/obsidian/ProjectNoteLookupService';
-import { SbomProjectMappingRepository } from '../../infrastructure/storage/SbomProjectMappingRepository';
-import { JoinTriageState, type JoinedTriageVulnerability } from '../../application/triage/JoinTriageState';
-import { SetTriageState } from '../../application/triage/SetTriageState';
-import { normalizeTriageFilterMode } from '../../application/triage/FilterByTriageState';
+import { FEED_TYPES } from '../../domain/feeds/FeedTypes';
+import type { ProjectNoteOption } from '../../infrastructure/obsidian/ProjectNoteLookupService';
+import { type JoinedTriageVulnerability, JoinTriageState } from '../../application/triage/JoinTriageState';
+import type { SetTriageState } from '../../application/triage/SetTriageState';
 import { buildTriageCorrelationKeyForVulnerability } from '../../domain/triage/TriageCorrelation';
 import type { TriageRecord } from '../../domain/triage/TriageRecord';
-import { CLOSED_TRIAGE_STATES, DEFAULT_TRIAGE_STATE, type TriageState } from '../../domain/triage/TriageState';
+import { DEFAULT_TRIAGE_STATE, type TriageState } from '../../domain/triage/TriageState';
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
-import { ProductNameNormalizer } from '../../domain/services/ProductNameNormalizer';
-import { HttpClient } from '../../infrastructure/clients/common/HttpClient';
-import { CooperativeScheduler } from '../../infrastructure/async/CooperativeScheduler';
-import type { IOsvQueryCache } from '../../infrastructure/clients/osv/IOsvQueryCache';
-import { CacheHydrator } from '../../infrastructure/storage/CacheHydrator';
-import { CachePruner } from '../../infrastructure/storage/CachePruner';
-import { IndexedDbTriageRepository } from '../../infrastructure/storage/IndexedDbTriageRepository';
-import { LegacyDataMigration, type LegacyPersistedPluginData } from '../../infrastructure/storage/LegacyDataMigration';
-import { SyncMetadataRepository } from '../../infrastructure/storage/SyncMetadataRepository';
-import { VulnCacheDb } from '../../infrastructure/storage/VulnCacheDb';
-import { VulnCacheRepository } from '../../infrastructure/storage/VulnCacheRepository';
-import { DailyRollupGenerator } from '../../application/rollup/DailyRollupGenerator';
-import { RollupMarkdownRenderer } from '../../application/rollup/RollupMarkdownRenderer';
-import { SelectRollupFindings } from '../../application/rollup/SelectRollupFindings';
-import { DailyRollupNoteWriter } from '../../infrastructure/obsidian/DailyRollupNoteWriter';
-import { ComponentNoteResolverFactory } from '../../infrastructure/obsidian-adapters/ObsidianNoteResolver';
 import { VULNDASH_VIEW_TYPE, VulnDashView } from '../views/VulnDashView';
 import { GenerateDailyRollupCommand } from '../commands/GenerateDailyRollupCommand';
 import { VulnDashSettingTab } from '../settings/VulnDashSettingsTab';
-import { decryptSecret, ENCRYPTED_SECRET_PREFIX, encryptSecret } from '../../infrastructure/security/crypto';
-
-interface LegacyImportedSbomComponent {
-  bomRef?: unknown;
-  cpe?: unknown;
-  excluded?: unknown;
-  name?: unknown;
-  normalizedName?: unknown;
-  purl?: unknown;
-}
-
-interface LegacyImportedSbomConfig extends Partial<ImportedSbomConfig> {
-  components?: LegacyImportedSbomComponent[];
-  lastImportError?: unknown;
-  lastImportHash?: unknown;
-}
-
-const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
-  id: true,
-  title: true,
-  source: true,
-  severity: true,
-  cvssScore: true,
-  publishedAt: true
-};
-
-const DEFAULT_FEEDS: FeedConfig[] = [
-  { id: 'nvd-default', name: 'NVD', type: 'nvd', enabled: true, dateFilterType: 'modified' },
-  { id: 'github-advisories-default', name: 'GitHub', type: 'github_advisory', enabled: true },
-  {
-    id: 'osv-default',
-    name: 'OSV',
-    type: 'osv',
-    enabled: true,
-    cacheTtlMs: 6 * 60 * 60 * 1000,
-    negativeCacheTtlMs: 60 * 60 * 1000,
-    requestTimeoutMs: 15_000,
-    maxConcurrentBatches: 4
-  }
-];
-
-const MAX_OSV_CONCURRENT_BATCHES = 8;
-
-const DEFAULT_CACHE_STORAGE: CacheStorageSettings = {
-  hardCap: 5000,
-  hydrateMaxItems: 1000,
-  hydratePageSize: 200,
-  pruneBatchSize: 250,
-  ttlMs: 30 * 24 * 60 * 60 * 1000
-};
-
-const DEFAULT_DAILY_ROLLUP_SETTINGS: DailyRollupSettings = {
-  folderPath: 'VulnDash Briefings',
-  severityThreshold: 'HIGH',
-  excludedTriageStates: [...CLOSED_TRIAGE_STATES],
-  includeUnmappedFindings: true,
-  autoGenerateOnFirstSyncOfDay: false,
-  lastAutoGeneratedOn: ''
-};
-
-export const SETTINGS_VERSION = 9;
-
-export const DEFAULT_SETTINGS: VulnDashSettings = {
-  pollingIntervalMs: 60_000,
-  pollOnStartup: true,
-  keywordFilters: [],
-  manualProductFilters: [],
-  sbomFolders: [],
-  followedSbomComponentKeys: [],
-  disabledSbomComponentKeys: [],
-  productFilters: [],
-  minSeverity: 'MEDIUM',
-  minCvssScore: 4.0,
-  nvdApiKey: '',
-  githubToken: '',
-  systemNotificationsEnabled: true,
-  desktopAlertsHighOrCritical: false,
-  cacheDurationMs: 60_000,
-  maxResults: 200,
-  defaultSortOrder: 'publishedAt',
-  dashboardDateField: 'modified',
-  colorCodedSeverity: true,
-  columnVisibility: DEFAULT_COLUMN_VISIBILITY,
-  triageFilter: 'all',
-  keywordRegexEnabled: false,
-  enableNvdFeed: true,
-  enableGithubFeed: true,
-  dailyRollup: { ...DEFAULT_DAILY_ROLLUP_SETTINGS },
-  sboms: [],
-  sbomOverrides: {},
-  sbomImportMode: 'append',
-  sbomPath: '',
-  syncControls: {
-    maxPages: 10,
-    maxItems: 500,
-    retryCount: 3,
-    backoffBaseMs: 1_000,
-    overlapWindowMs: 180_000,
-    bootstrapLookbackMs: 86_400_000,
-    debugHttpMetadata: false
-  },
-  sourceSyncCursor: {},
-  cacheStorage: DEFAULT_CACHE_STORAGE,
-  settingsVersion: SETTINGS_VERSION,
-  feeds: DEFAULT_FEEDS.map((feed) => ({ ...feed }))
-};
-
-const legacyNameNormalizer = new ProductNameNormalizer();
-const componentPreferenceService = new ComponentPreferenceService();
-
-const cloneFeedConfig = (feed: FeedConfig): FeedConfig => ({ ...feed });
-
-const normalizePositiveInteger = (value: unknown, fallback: number): number =>
-  typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
-
-const normalizeBoundedPositiveInteger = (value: unknown, fallback: number, maximum: number): number =>
-  Math.min(normalizePositiveInteger(value, fallback), maximum);
-
-const getDefaultOsvFeedConfig = (): OsvFeedConfig => {
-  const defaultFeed = DEFAULT_FEEDS.find((feed): feed is OsvFeedConfig => feed.type === 'osv');
-  if (!defaultFeed) {
-    throw new Error('Missing default OSV feed configuration.');
-  }
-
-  return defaultFeed;
-};
-
-const normalizeFeedConfigs = (feeds: FeedConfig[] | undefined): FeedConfig[] => (feeds ?? []).map((feed) => {
-  if (feed.type === 'nvd') {
-    return {
-      ...feed,
-      dateFilterType: feed.dateFilterType === 'published' ? 'published' : 'modified'
-    };
-  }
-
-  if (feed.type === 'osv') {
-    const defaults = getDefaultOsvFeedConfig();
-    return {
-      ...feed,
-      cacheTtlMs: normalizePositiveInteger(feed.cacheTtlMs, defaults.cacheTtlMs),
-      negativeCacheTtlMs: normalizePositiveInteger(feed.negativeCacheTtlMs, defaults.negativeCacheTtlMs),
-      requestTimeoutMs: normalizePositiveInteger(feed.requestTimeoutMs, defaults.requestTimeoutMs),
-      maxConcurrentBatches: normalizeBoundedPositiveInteger(
-        feed.maxConcurrentBatches,
-        defaults.maxConcurrentBatches,
-        MAX_OSV_CONCURRENT_BATCHES
-      )
-    };
-  }
-
-  return { ...feed };
-});
-
-const normalizeStringList = (values: string[] | undefined): string[] => {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-
-  return Array.from(new Set(values
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0)));
-};
-
-const normalizePathList = (values: string[] | undefined): string[] => {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-
-  return Array.from(new Set(values
-    .map((value) => typeof value === 'string' ? normalizePath(value.trim()) : '')
-    .filter((value) => value.length > 0)));
-};
+import { CredentialStore } from '../../infrastructure/security/CredentialStore';
 
 const areStringListsEqual = (left: string[], right: string[]): boolean =>
   left.length === right.length && left.every((value, index) => value === right[index]);
-
-const buildLegacySbomLabel = (path: string): string => {
-  const normalized = normalizePath(path);
-  const segments = normalized.split('/').filter(Boolean);
-  const candidate = segments.at(-1);
-  return candidate && candidate.length > 0 ? candidate : 'SBOM';
-};
-
-const getTrimmedString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
-
-const normalizeImportedSbomConfig = (
-  sbom: Partial<ImportedSbomConfig> & {
-    componentCount?: unknown;
-    lastError?: unknown;
-    lastImportError?: unknown;
-    lastImportHash?: unknown;
-    lastImportedAt?: unknown;
-  },
-  index: number
-): ImportedSbomConfig => {
-  const namespace = getTrimmedString(sbom.namespace);
-  const contentHash = getTrimmedString(sbom.contentHash) || getTrimmedString(sbom.lastImportHash);
-  const lastError = getTrimmedString(sbom.lastError) || getTrimmedString(sbom.lastImportError);
-  const componentCount = typeof sbom.componentCount === 'number' && Number.isFinite(sbom.componentCount) && sbom.componentCount >= 0
-    ? sbom.componentCount
-    : undefined;
-  const lastImportedAt = typeof sbom.lastImportedAt === 'number' && Number.isFinite(sbom.lastImportedAt)
-    ? sbom.lastImportedAt
-    : 0;
-  const linkedProjectNotePath = getTrimmedString(sbom.linkedProjectNotePath);
-  const linkedProjectDisplayName = getTrimmedString(sbom.linkedProjectDisplayName);
-
-  const normalized: ImportedSbomConfig = {
-    contentHash,
-    enabled: sbom.enabled ?? true,
-    id: getTrimmedString(sbom.id) || `sbom-${index + 1}`,
-    label: getTrimmedString(sbom.label) || buildLegacySbomLabel(getTrimmedString(sbom.path)),
-    lastImportedAt,
-    path: getTrimmedString(sbom.path) ? normalizePath(getTrimmedString(sbom.path)) : ''
-  };
-
-  if (namespace) {
-    normalized.namespace = namespace;
-  }
-  if (componentCount !== undefined) {
-    normalized.componentCount = componentCount;
-  }
-  if (lastError) {
-    normalized.lastError = lastError;
-  }
-  if (linkedProjectNotePath) {
-    normalized.linkedProjectNotePath = normalizePath(linkedProjectNotePath);
-  }
-  if (linkedProjectDisplayName) {
-    normalized.linkedProjectDisplayName = linkedProjectDisplayName;
-  }
-
-  return normalized;
-};
-
-const createLegacySbomConfig = (path: string): ImportedSbomConfig => {
-  const normalizedPath = normalizePath(path);
-  return {
-    contentHash: '',
-    enabled: true,
-    id: 'sbom-1',
-    label: buildLegacySbomLabel(normalizedPath),
-    lastImportedAt: 0,
-    path: normalizedPath
-  };
-};
-
-const normalizeSbomOverride = (override: Partial<SbomComponentOverride>): SbomComponentOverride | null => {
-  const editedName = getTrimmedString(override.editedName);
-  const excluded = override.excluded === true;
-  const normalized: SbomComponentOverride = {};
-
-  if (editedName) {
-    normalized.editedName = editedName;
-  }
-  if (excluded) {
-    normalized.excluded = true;
-  }
-
-  return Object.keys(normalized).length > 0 ? normalized : null;
-};
-
-const normalizeSbomOverrides = (overrides: Record<string, SbomComponentOverride> | undefined): Record<string, SbomComponentOverride> => {
-  if (!overrides || typeof overrides !== 'object') {
-    return {};
-  }
-
-  const normalizedEntries = Object.entries(overrides).flatMap(([key, value]) => {
-    const override = normalizeSbomOverride(value);
-    return override ? [[key, override] as const] : [];
-  });
-
-  return Object.fromEntries(normalizedEntries);
-};
-
-const migrateLegacySbomOverrides = (sboms: LegacyImportedSbomConfig[]): Record<string, SbomComponentOverride> => {
-  const overrides: Record<string, SbomComponentOverride> = {};
-
-  for (const [index, sbom] of sboms.entries()) {
-    const normalizedSbom = normalizeImportedSbomConfig(sbom, index);
-    const components = Array.isArray(sbom.components) ? sbom.components : [];
-
-    for (const component of components) {
-      const originalName = getTrimmedString(component.name)
-        || getTrimmedString(component.normalizedName)
-        || getTrimmedString(component.cpe)
-        || getTrimmedString(component.purl)
-        || getTrimmedString(component.bomRef);
-      if (!originalName) {
-        continue;
-      }
-
-      const editedName = getTrimmedString(component.normalizedName);
-      const defaultName = legacyNameNormalizer.normalize(originalName) || originalName;
-      const overrideInput: Partial<SbomComponentOverride> = {
-        excluded: component.excluded === true
-      };
-      if (editedName && editedName !== defaultName) {
-        overrideInput.editedName = editedName;
-      }
-      const override = normalizeSbomOverride(overrideInput);
-      if (!override) {
-        continue;
-      }
-
-      overrides[buildSbomOverrideKey(normalizedSbom.id, originalName)] = override;
-    }
-  }
-
-  return overrides;
-};
-
-const normalizeCacheStorage = (value: Partial<CacheStorageSettings> | undefined): CacheStorageSettings => ({
-  hardCap: typeof value?.hardCap === 'number' && Number.isFinite(value.hardCap) && value.hardCap > 0 ? Math.floor(value.hardCap) : DEFAULT_CACHE_STORAGE.hardCap,
-  hydrateMaxItems: typeof value?.hydrateMaxItems === 'number' && Number.isFinite(value.hydrateMaxItems) && value.hydrateMaxItems > 0 ? Math.floor(value.hydrateMaxItems) : DEFAULT_CACHE_STORAGE.hydrateMaxItems,
-  hydratePageSize: typeof value?.hydratePageSize === 'number' && Number.isFinite(value.hydratePageSize) && value.hydratePageSize > 0 ? Math.floor(value.hydratePageSize) : DEFAULT_CACHE_STORAGE.hydratePageSize,
-  pruneBatchSize: typeof value?.pruneBatchSize === 'number' && Number.isFinite(value.pruneBatchSize) && value.pruneBatchSize > 0 ? Math.floor(value.pruneBatchSize) : DEFAULT_CACHE_STORAGE.pruneBatchSize,
-  ttlMs: typeof value?.ttlMs === 'number' && Number.isFinite(value.ttlMs) && value.ttlMs > 0 ? Math.floor(value.ttlMs) : DEFAULT_CACHE_STORAGE.ttlMs
-});
-
-const normalizeDailyRollupSettings = (
-  value: Partial<DailyRollupSettings> | undefined,
-  legacy: {
-    autoHighNoteCreationEnabled?: unknown;
-    autoNoteCreationEnabled?: unknown;
-    autoNoteFolder?: unknown;
-  } = {}
-): DailyRollupSettings => {
-  const severityThreshold = value?.severityThreshold ?? (legacy.autoHighNoteCreationEnabled === true ? 'HIGH' : DEFAULT_DAILY_ROLLUP_SETTINGS.severityThreshold);
-  const excludedTriageStates = Array.isArray(value?.excludedTriageStates)
-    ? Array.from(new Set(value.excludedTriageStates.filter((state): state is TriageState => typeof state === 'string' && state.length > 0)))
-    : [...DEFAULT_DAILY_ROLLUP_SETTINGS.excludedTriageStates];
-  const folderPath = typeof value?.folderPath === 'string' && value.folderPath.trim().length > 0
-    ? normalizePath(value.folderPath.trim())
-    : (typeof legacy.autoNoteFolder === 'string' && legacy.autoNoteFolder.trim().length > 0
-      ? normalizePath(legacy.autoNoteFolder.trim())
-      : DEFAULT_DAILY_ROLLUP_SETTINGS.folderPath);
-
-  return {
-    autoGenerateOnFirstSyncOfDay: typeof value?.autoGenerateOnFirstSyncOfDay === 'boolean'
-      ? value.autoGenerateOnFirstSyncOfDay
-      : legacy.autoNoteCreationEnabled === true || legacy.autoHighNoteCreationEnabled === true,
-    excludedTriageStates,
-    folderPath,
-    includeUnmappedFindings: value?.includeUnmappedFindings ?? DEFAULT_DAILY_ROLLUP_SETTINGS.includeUnmappedFindings,
-    lastAutoGeneratedOn: typeof value?.lastAutoGeneratedOn === 'string' ? value.lastAutoGeneratedOn.trim() : '',
-    severityThreshold
-  };
-};
-
-const normalizeRuntimeSettings = (settings: VulnDashSettings): VulnDashSettings => ({
-  ...componentPreferenceService.normalizeSettings(settings),
-  keywordFilters: normalizeStringList(settings.keywordFilters),
-  manualProductFilters: normalizeStringList(settings.manualProductFilters),
-  productFilters: normalizeStringList(settings.productFilters),
-  feeds: normalizeFeedConfigs(settings.feeds),
-  sbomFolders: normalizePathList(settings.sbomFolders),
-  sboms: settings.sboms.map((sbom, index) => normalizeImportedSbomConfig(sbom, index)),
-  sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
-  dashboardDateField: settings.dashboardDateField === 'published' ? 'published' : 'modified',
-  triageFilter: normalizeTriageFilterMode(settings.triageFilter),
-  dailyRollup: normalizeDailyRollupSettings(settings.dailyRollup),
-  sbomPath: '',
-  cacheStorage: normalizeCacheStorage(settings.cacheStorage),
-  settingsVersion: SETTINGS_VERSION
-});
-
-export const migrateLegacySettings = (settings: Partial<VulnDashSettings> & {
-  autoHighNoteCreationEnabled?: unknown;
-  autoNoteCreationEnabled?: unknown;
-  autoNoteFolder?: unknown;
-  sboms?: LegacyImportedSbomConfig[];
-}): VulnDashSettings => {
-  const hasDynamicFeeds = Array.isArray(settings.feeds) && settings.feeds.length > 0;
-  const feeds = hasDynamicFeeds
-    ? normalizeFeedConfigs(settings.feeds)
-    : DEFAULT_FEEDS.map((feed) => cloneFeedConfig(feed));
-
-  if (!hasDynamicFeeds) {
-    const nvdFeed = feeds.find((feed): feed is Extract<FeedConfig, { type: 'nvd' }> => feed.type === 'nvd' && feed.id === 'nvd-default');
-    if (nvdFeed && settings.nvdApiKey) {
-      nvdFeed.apiKey = settings.nvdApiKey;
-    }
-    if (typeof settings.enableNvdFeed === 'boolean' && nvdFeed) {
-      nvdFeed.enabled = settings.enableNvdFeed;
-    }
-
-    const githubFeed = feeds.find((feed) => feed.type === 'github_advisory' && feed.id === 'github-advisories-default');
-    if (githubFeed && settings.githubToken) {
-      githubFeed.token = settings.githubToken;
-    }
-    if (typeof settings.enableGithubFeed === 'boolean' && githubFeed) {
-      githubFeed.enabled = settings.enableGithubFeed;
-    }
-  }
-
-  const cursor = { ...(settings.sourceSyncCursor ?? {}) };
-  const legacyNvdCursor = cursor.NVD;
-  const legacyGithubCursor = cursor.GitHub;
-  if (legacyNvdCursor && !cursor['nvd-default']) {
-    cursor['nvd-default'] = legacyNvdCursor;
-  }
-  if (legacyGithubCursor && !cursor['github-advisories-default']) {
-    cursor['github-advisories-default'] = legacyGithubCursor;
-  }
-  delete cursor.NVD;
-  delete cursor.GitHub;
-
-  const isCurrentSettingsVersion = (settings.settingsVersion ?? 0) >= SETTINGS_VERSION;
-  const legacyProductFilters = normalizeStringList(settings.productFilters);
-  const manualProductFilters = normalizeStringList(isCurrentSettingsVersion
-    ? settings.manualProductFilters
-    : (settings.manualProductFilters ?? legacyProductFilters));
-  const productFilters = normalizeStringList(isCurrentSettingsVersion
-    ? (settings.productFilters ?? [])
-    : manualProductFilters);
-
-  const rawSboms = Array.isArray(settings.sboms) ? settings.sboms : [];
-  const sboms = rawSboms.length > 0
-    ? rawSboms.map((sbom, index) => normalizeImportedSbomConfig(sbom, index))
-    : (settings.sbomPath?.trim()
-      ? [createLegacySbomConfig(settings.sbomPath)]
-      : []);
-
-  const migratedOverrides = migrateLegacySbomOverrides(rawSboms);
-  const sbomOverrides = normalizeSbomOverrides({
-    ...migratedOverrides,
-    ...(settings.sbomOverrides ?? {})
-  });
-
-  return normalizeRuntimeSettings({
-    ...DEFAULT_SETTINGS,
-    ...settings,
-    dailyRollup: normalizeDailyRollupSettings(settings.dailyRollup, settings),
-    manualProductFilters,
-    productFilters,
-    sboms,
-    sbomOverrides,
-    settingsVersion: SETTINGS_VERSION,
-    feeds,
-    sourceSyncCursor: cursor,
-    columnVisibility: {
-      ...DEFAULT_COLUMN_VISIBILITY,
-      ...(settings.columnVisibility ?? {})
-    },
-    syncControls: {
-      ...DEFAULT_SETTINGS.syncControls,
-      ...(settings.syncControls ?? {})
-    },
-    cacheStorage: normalizeCacheStorage(settings.cacheStorage)
-  });
-};
 
 const createEmptySbomConfig = (index: number): ImportedSbomConfig => ({
   contentHash: '',
@@ -541,39 +73,7 @@ const createEmptySbomConfig = (index: number): ImportedSbomConfig => ({
   path: ''
 });
 
-export const buildPersistedSettingsSnapshot = (
-  settings: VulnDashSettings,
-  secrets: {
-    githubToken: string;
-    nvdApiKey: string;
-  },
-  feeds: FeedConfig[]
-): VulnDashSettings => ({
-  ...componentPreferenceService.normalizeSettings(settings),
-  sbomOverrides: normalizeSbomOverrides(settings.sbomOverrides),
-  sbomFolders: normalizePathList(settings.sbomFolders),
-  sbomPath: '',
-  settingsVersion: SETTINGS_VERSION,
-  nvdApiKey: secrets.nvdApiKey,
-  githubToken: secrets.githubToken,
-  feeds
-});
-
-interface PersistentCacheServices {
-  cacheDb: VulnCacheDb;
-  cacheHydrator: CacheHydrator;
-  cachePruner: CachePruner;
-  cacheRepository: VulnCacheRepository;
-  metadataRepository: SyncMetadataRepository;
-  triageRepository: IndexedDbTriageRepository;
-}
-
-type LoadedPluginData = LegacyPersistedPluginData & Partial<VulnDashSettings> & {
-  autoHighNoteCreationEnabled?: unknown;
-  autoNoteCreationEnabled?: unknown;
-  autoNoteFolder?: unknown;
-  sboms?: LegacyImportedSbomConfig[];
-};
+type LoadedPluginData = SettingsMigrationInput;
 
 interface VisibleTriageState {
   readonly correlationKey: string;
@@ -585,36 +85,15 @@ export default class VulnDashPlugin extends Plugin {
   private settings: VulnDashSettings = DEFAULT_SETTINGS;
   private stopPolling: (() => void) | null = null;
   private pollingEnabled = false;
-  private readonly alertEngine = new AlertEngine();
-  private readonly componentInventoryService = new ComponentInventoryService();
-  private readonly componentPreferenceService = componentPreferenceService;
-  private readonly componentVulnerabilityLinkService = new ComponentVulnerabilityLinkService();
-  private readonly relationshipNormalizer = new RelationshipNormalizer();
-  private readonly sbomCatalogService = new SbomCatalogService();
-  private readonly sbomComparisonService = new SbomComparisonService();
-  private readonly sbomFilterMergeService = new SbomFilterMergeService();
-  private readonly sbomComponentIndex = new SbomComponentIndex();
-  private readonly sbomProjectMappingRepository = new SbomProjectMappingRepository(
-    () => this.settings.sboms,
-    async (sbomId, updates) => this.updateSbomConfig(sbomId, updates)
-  );
-  private readonly resolveAffectedProjects = new ResolveAffectedProjects(
-    this.sbomProjectMappingRepository,
-    {
-      getByPaths: async (references) => this.getProjectNoteLookupService().getByPaths(references)
-    }
-  );
-  private dailyRollupGenerator: DailyRollupGenerator | null = null;
-  private projectNoteLookupService: ProjectNoteLookupService | null = null;
-  private sbomImportService: SbomImportService | null = null;
+  private appModule: VulnDashAppModule | null = null;
   private triageJoinUseCase: JoinTriageState | null = null;
   private triageSetUseCase: SetTriageState | null = null;
   private syncService: VulnerabilitySyncService | null = null;
   private syncServiceGeneration = 0;
   private dataProcessingChain: Promise<void> = Promise.resolve();
   private persistentCacheServices: PersistentCacheServices | null = null;
+  private readonly credentialStore = new CredentialStore();
   private loadedPluginData: LoadedPluginData | null = null;
-  private readonly storageScheduler = new CooperativeScheduler();
   private lastFetchAt = 0;
   private cachedVulnerabilities: Vulnerability[] = [];
   private visibleVulnerabilities: Vulnerability[] = [];
@@ -678,9 +157,7 @@ export default class VulnDashPlugin extends Plugin {
 
   public override onunload(): void {
     this.stopPollingLoop();
-    if (this.persistentCacheServices) {
-      void this.persistentCacheServices.cacheDb.close();
-    }
+    void this.getAppModule().closePersistentCache(this.persistentCacheServices);
   }
 
   public async refreshNow(): Promise<void> {
@@ -699,7 +176,7 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public listProjectNotes(): ProjectNoteOption[] {
-    return this.getProjectNoteLookupService().listProjectNotes();
+    return this.getAppModule().listProjectNotes();
   }
 
   public async getSbomProjectNoteStatuses(): Promise<Map<string, ProjectNoteLookupResult | null>> {
@@ -710,7 +187,7 @@ export default class VulnDashPlugin extends Plugin {
 
       return [
         sbom.id,
-        await this.getProjectNoteLookupService().resolveByPath(sbom.linkedProjectNotePath, sbom.linkedProjectDisplayName)
+        await this.getAppModule().resolveProjectNotePath(sbom.linkedProjectNotePath, sbom.linkedProjectDisplayName)
       ] as const;
     }));
 
@@ -718,15 +195,15 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async linkSbomToProjectNote(sbomId: string, notePath: string): Promise<void> {
-    const noteState = await this.getProjectNoteLookupService().resolveByPath(notePath);
-    await this.sbomProjectMappingRepository.save(createSbomProjectMapping(
+    const noteState = await this.getAppModule().resolveProjectNotePath(notePath);
+    await this.getAppModule().sbomProjectMappingRepository.save(createSbomProjectMapping(
       sbomId,
       createProjectNoteReference(noteState.notePath, noteState.displayName)
     ));
   }
 
   public async clearSbomProjectNote(sbomId: string): Promise<void> {
-    await this.sbomProjectMappingRepository.deleteBySbomId(sbomId);
+    await this.getAppModule().sbomProjectMappingRepository.deleteBySbomId(sbomId);
   }
 
   public async togglePolling(): Promise<void> {
@@ -752,7 +229,7 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async removeSbom(sbomId: string): Promise<void> {
-    this.getSbomImportService().invalidateCache(sbomId);
+    this.getAppModule().invalidateSbomCache(sbomId);
 
     const nextSboms = this.settings.sboms.filter((sbom) => sbom.id !== sbomId);
     const nextOverrides = Object.fromEntries(Object.entries(this.settings.sbomOverrides)
@@ -781,7 +258,7 @@ export default class VulnDashPlugin extends Plugin {
     ));
 
     if (typeof updates.path === 'string' && normalizePath(updates.path || '') !== normalizePath(current.path || '')) {
-      this.getSbomImportService().invalidateCache(sbomId);
+      this.getAppModule().invalidateSbomCache(sbomId);
     }
 
     const shouldRecompute = updates.enabled !== undefined || updates.path !== undefined;
@@ -817,13 +294,14 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async recomputeFilters(): Promise<void> {
-    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
+    const appModule = this.getAppModule();
+    const loadResults = await appModule.sbomImportService.loadAllSboms(this.settings);
     const mergedSettings = this.applySbomLoadResults(this.settings, loadResults);
     const nextSettings = normalizeRuntimeSettings({
       ...mergedSettings,
-      productFilters: this.sbomFilterMergeService.merge(
+      productFilters: appModule.sbomFilterMergeService.merge(
         mergedSettings,
-        this.getSbomImportService().getRuntimeCacheSnapshot()
+        appModule.sbomImportService.getRuntimeCacheSnapshot()
       )
     });
     const filtersChanged = !areStringListsEqual(nextSettings.productFilters, this.settings.productFilters);
@@ -845,7 +323,7 @@ export default class VulnDashPlugin extends Plugin {
       return { message: 'SBOM entry was not found.', success: false };
     }
 
-    const result = await this.getSbomImportService().loadSbom(sbom, { force: true });
+    const result = await this.getAppModule().sbomImportService.loadSbom(sbom, { force: true });
     const nextSettings = {
       ...this.settings,
       sboms: this.settings.sboms.map((entry, index) => (
@@ -868,7 +346,10 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async syncAllSboms(): Promise<{ failed: number; succeeded: number; total: number }> {
-    const results = await Promise.all(this.settings.sboms.map(async (sbom) => [sbom.id, await this.getSbomImportService().loadSbom(sbom, { force: true })] as const));
+    const results = await Promise.all(this.settings.sboms.map(async (sbom) => [
+      sbom.id,
+      await this.getAppModule().sbomImportService.loadSbom(sbom, { force: true })
+    ] as const));
     const resultMap = new Map(results);
     let succeeded = 0;
     let failed = 0;
@@ -904,19 +385,19 @@ export default class VulnDashPlugin extends Plugin {
       };
     }
 
-    return this.getSbomImportService().getFileChangeStatus(sbom);
+    return this.getAppModule().sbomImportService.getFileChangeStatus(sbom);
   }
 
   public async getSbomFileStatuses(): Promise<Map<string, SbomFileChangeStatus>> {
     const entries = await Promise.all(this.settings.sboms.map(async (sbom) => (
-      [sbom.id, await this.getSbomImportService().getFileChangeStatus(sbom)] as const
+      [sbom.id, await this.getAppModule().sbomImportService.getFileChangeStatus(sbom)] as const
     )));
 
     return new Map(entries);
   }
 
   public async validateSbomPath(path: string): Promise<SbomValidationResult> {
-    return this.getSbomImportService().validateSbomPath(path);
+    return this.getAppModule().sbomImportService.validateSbomPath(path);
   }
 
   public getSbomById(sbomId: string): ImportedSbomConfig | undefined {
@@ -924,33 +405,34 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public isSbomComponentFollowed(componentKey: string): boolean {
-    return this.componentPreferenceService.isFollowed(componentKey, this.settings);
+    return this.getAppModule().componentPreferenceService.isFollowed(componentKey, this.settings);
   }
 
   public isSbomComponentEnabled(componentKey: string): boolean {
-    return this.componentPreferenceService.isEnabled(componentKey, this.settings);
+    return this.getAppModule().componentPreferenceService.isEnabled(componentKey, this.settings);
   }
 
   public async followSbomComponent(componentKey: string): Promise<void> {
-    await this.applySettings(this.componentPreferenceService.follow(componentKey, this.settings));
+    await this.applySettings(this.getAppModule().componentPreferenceService.follow(componentKey, this.settings));
   }
 
   public async unfollowSbomComponent(componentKey: string): Promise<void> {
-    await this.applySettings(this.componentPreferenceService.unfollow(componentKey, this.settings));
+    await this.applySettings(this.getAppModule().componentPreferenceService.unfollow(componentKey, this.settings));
   }
 
   public async disableSbomComponent(componentKey: string): Promise<void> {
-    await this.applySettings(this.componentPreferenceService.disable(componentKey, this.settings));
+    await this.applySettings(this.getAppModule().componentPreferenceService.disable(componentKey, this.settings));
   }
 
   public async enableSbomComponent(componentKey: string): Promise<void> {
-    await this.applySettings(this.componentPreferenceService.enable(componentKey, this.settings));
+    await this.applySettings(this.getAppModule().componentPreferenceService.enable(componentKey, this.settings));
   }
 
   public async getSbomCatalog(): Promise<ComponentCatalog> {
-    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
-    const catalog = this.sbomCatalogService.buildCatalog(this.collectCatalogDocuments(loadResults));
-    return this.componentPreferenceService.applyPreferences(catalog, this.settings);
+    const appModule = this.getAppModule();
+    const loadResults = await appModule.sbomImportService.loadAllSboms(this.settings);
+    const catalog = appModule.sbomCatalogService.buildCatalog(this.collectCatalogDocuments(loadResults));
+    return appModule.componentPreferenceService.applyPreferences(catalog, this.settings);
   }
 
   public async getActiveWorkspacePurls(): Promise<readonly string[]> {
@@ -976,17 +458,19 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   public async getComponentInventorySnapshot(): Promise<ComponentInventorySnapshot> {
-    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
-    return this.componentInventoryService.buildSnapshot(this.settings, loadResults);
+    const appModule = this.getAppModule();
+    const loadResults = await appModule.sbomImportService.loadAllSboms(this.settings);
+    return appModule.componentInventoryService.buildSnapshot(this.settings, loadResults);
   }
 
   public async getComponentInventoryWorkspaceSnapshot(): Promise<ComponentInventoryWorkspaceSnapshot> {
-    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
-    const inventory = this.componentInventoryService.buildSnapshot(this.settings, loadResults);
+    const appModule = this.getAppModule();
+    const loadResults = await appModule.sbomImportService.loadAllSboms(this.settings);
+    const inventory = appModule.componentInventoryService.buildSnapshot(this.settings, loadResults);
 
     return {
       inventory,
-      relationships: this.componentVulnerabilityLinkService.buildGraph(
+      relationships: appModule.componentVulnerabilityLinkService.buildGraph(
         inventory.catalog.components,
         this.visibleVulnerabilities
       )
@@ -1000,7 +484,7 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     const runtimeState = await this.ensureSbomRuntimeState(sbom);
-    return this.sbomFilterMergeService.getResolvedComponents(sbom, runtimeState, this.settings.sbomOverrides);
+    return this.getAppModule().sbomFilterMergeService.getResolvedComponents(sbom, runtimeState, this.settings.sbomOverrides);
   }
 
   public async compareSboms(leftSbomId: string, rightSbomId: string): Promise<SbomComparisonResult | null> {
@@ -1013,18 +497,18 @@ export default class VulnDashPlugin extends Plugin {
       return null;
     }
 
-    return this.sbomComparisonService.compare(
+    return this.getAppModule().sbomComparisonService.compare(
       leftComponents.filter((component) => !component.excluded).map((component) => component.displayName),
       rightComponents.filter((component) => !component.excluded).map((component) => component.displayName)
     );
   }
 
   public getSbomRuntimeState(sbomId: string): RuntimeSbomState | null {
-    return this.getSbomImportService().getRuntimeState(sbomId);
+    return this.getAppModule().sbomImportService.getRuntimeState(sbomId);
   }
 
   private async ensureSbomRuntimeState(sbom: ImportedSbomConfig): Promise<RuntimeSbomState | null> {
-    const result = await this.getSbomImportService().loadSbom(sbom);
+    const result = await this.getAppModule().sbomImportService.loadSbom(sbom);
     if (result.success) {
       return result.state;
     }
@@ -1063,18 +547,19 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private async buildCorrelationWorkspace(vulnerabilities: readonly Vulnerability[]): Promise<{
-    componentIndex: ReturnType<SbomComponentIndex['build']>;
+    componentIndex: ReturnType<VulnDashAppModule['sbomComponentIndex']['build']>;
     snapshot: ComponentInventoryWorkspaceSnapshot;
   }> {
-    const loadResults = await this.getSbomImportService().loadAllSboms(this.settings);
-    const inventory = this.componentInventoryService.buildSnapshot(this.settings, loadResults);
-    const relationships = this.componentVulnerabilityLinkService.buildGraph(
+    const appModule = this.getAppModule();
+    const loadResults = await appModule.sbomImportService.loadAllSboms(this.settings);
+    const inventory = appModule.componentInventoryService.buildSnapshot(this.settings, loadResults);
+    const relationships = appModule.componentVulnerabilityLinkService.buildGraph(
       inventory.catalog.components,
       [...vulnerabilities]
     );
 
     return {
-      componentIndex: this.sbomComponentIndex.build(
+      componentIndex: appModule.sbomComponentIndex.build(
         inventory.catalog.components,
         this.buildSbomIdsBySourcePath(loadResults)
       ),
@@ -1091,7 +576,7 @@ export default class VulnDashPlugin extends Plugin {
     }
 
     const workspace = await this.buildCorrelationWorkspace(vulnerabilities);
-    return this.resolveAffectedProjects.execute({
+    return this.getAppModule().resolveAffectedProjects.execute({
       componentIndex: workspace.componentIndex,
       relationships: workspace.snapshot.relationships,
       sboms: this.settings.sboms.map((sbom) => ({
@@ -1158,8 +643,9 @@ export default class VulnDashPlugin extends Plugin {
       suppressNotifications?: boolean;
     }
   ): Promise<void> {
+    const appModule = this.getAppModule();
     const triageByKey = await this.loadVisibleTriageState(vulnerabilities);
-    const filtered = this.alertEngine.filter(vulnerabilities, this.settings, {
+    const filtered = appModule.alertEngine.filter(vulnerabilities, this.settings, {
       getTriageState: (vulnerability) => triageByKey.get(this.getVulnerabilityCacheKey(vulnerability))?.state
     });
     const filteredTriageByKey = new Map(filtered.map((vulnerability) => {
@@ -1287,7 +773,7 @@ export default class VulnDashPlugin extends Plugin {
       const date = this.getCurrentDateStamp();
       const triageByKey = await this.loadVisibleTriageState(this.cachedVulnerabilities);
       const affectedProjectsByVulnerabilityRef = await this.resolveAffectedProjectMap(this.cachedVulnerabilities);
-      const result = await this.getDailyRollupGenerator().execute({
+      const result = await this.getAppModule().dailyRollupGenerator.execute({
         affectedProjectsByVulnerabilityRef,
         date,
         settings: this.settings.dailyRollup,
@@ -1315,30 +801,6 @@ export default class VulnDashPlugin extends Plugin {
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
-  }
-
-  private getDailyRollupGenerator(): DailyRollupGenerator {
-    if (!this.dailyRollupGenerator) {
-      this.dailyRollupGenerator = new DailyRollupGenerator(
-        new SelectRollupFindings(),
-        new RollupMarkdownRenderer(),
-        new DailyRollupNoteWriter({
-          create: async (path, noteContent) => {
-            await this.app.vault.create(normalizePath(path), noteContent);
-          },
-          createFolder: async (path) => {
-            await this.app.vault.createFolder(normalizePath(path));
-          },
-          exists: async (path) => this.app.vault.adapter.exists(normalizePath(path)),
-          read: async (path) => this.app.vault.adapter.read(normalizePath(path)),
-          write: async (path, noteContent) => {
-            await this.app.vault.adapter.write(normalizePath(path), noteContent);
-          }
-        })
-      );
-    }
-
-    return this.dailyRollupGenerator;
   }
 
   private async maybeAutoGenerateDailyRollup(): Promise<void> {
@@ -1472,24 +934,9 @@ export default class VulnDashPlugin extends Plugin {
       return this.syncService;
     }
 
-    const client = new HttpClient();
-    const osvQueryCache: IOsvQueryCache | undefined = this.persistentCacheServices?.cacheRepository;
-    const feeds = buildFeedsFromConfig(this.settings.feeds, client, this.settings.syncControls, {
-      ...(osvQueryCache ? { osvQueryCache } : {}),
-      getPurls: async () => this.getActiveWorkspacePurls()
-    });
     const generation = this.syncServiceGeneration;
-    const syncService = new VulnerabilitySyncService({
-      controls: this.settings.syncControls,
-      feeds,
-      ...(this.persistentCacheServices ? {
-        persistence: {
-          cacheHydrationLimit: this.settings.cacheStorage.hydrateMaxItems,
-          cacheHydrationPageSize: this.settings.cacheStorage.hydratePageSize,
-          cacheStore: this.persistentCacheServices.cacheRepository,
-          metadataStore: this.persistentCacheServices.metadataRepository
-        }
-      } : {}),
+    const syncService = this.getAppModule().createSyncService({
+      cachedVulnerabilities: this.cachedVulnerabilities,
       onPipelineEvent: (event) => {
         if (this.syncService !== syncService || this.syncServiceGeneration !== generation) {
           return;
@@ -1497,10 +944,8 @@ export default class VulnDashPlugin extends Plugin {
 
         this.handlePipelineEvent(event);
       },
-      state: {
-        cache: this.cachedVulnerabilities,
-        sourceSyncCursor: this.settings.sourceSyncCursor
-      }
+      persistentCacheServices: this.persistentCacheServices,
+      settings: this.settings
     });
 
     this.syncService = syncService;
@@ -1592,55 +1037,21 @@ export default class VulnDashPlugin extends Plugin {
   }
 
   private async initializePersistentCache(): Promise<void> {
-    try {
-      const cacheDb = new VulnCacheDb();
-      await cacheDb.open();
-      const cacheRepository = new VulnCacheRepository(cacheDb);
-      const metadataRepository = new SyncMetadataRepository(cacheDb);
-      const triageRepository = new IndexedDbTriageRepository(cacheDb);
-      const cacheHydrator = new CacheHydrator(cacheRepository, this.storageScheduler);
-      const cachePruner = new CachePruner(
-        cacheRepository,
-        this.storageScheduler,
-        async () => this.getActiveWorkspacePurls()
-      );
-      this.persistentCacheServices = {
-        cacheDb,
-        cacheHydrator,
-        cachePruner,
-        cacheRepository,
-        metadataRepository,
-        triageRepository
-      };
-      this.triageJoinUseCase = new JoinTriageState(triageRepository);
-      this.triageSetUseCase = new SetTriageState(triageRepository);
+    const result = await this.getAppModule().initializePersistentCache(this.loadedPluginData, this.settings);
+    this.persistentCacheServices = result.persistentCacheServices;
+    this.triageJoinUseCase = result.triageJoinUseCase;
+    this.triageSetUseCase = result.triageSetUseCase;
+    if (result.cachedVulnerabilities.length > 0) {
+      this.cachedVulnerabilities = [...result.cachedVulnerabilities];
+      this.lastFetchAt = result.lastFetchAt;
+    }
 
-      const migration = await new LegacyDataMigration(cacheRepository, metadataRepository).migrate(
-        this.loadedPluginData,
-        this.settings.feeds
-      );
-
-      const hydrated = await cacheHydrator.hydrateLatest({
-        limit: this.settings.cacheStorage.hydrateMaxItems,
-        pageSize: this.settings.cacheStorage.hydratePageSize
+    if (result.removedLegacyFields) {
+      this.settings = normalizeRuntimeSettings({
+        ...this.settings,
+        sourceSyncCursor: {}
       });
-      if (hydrated.length > 0) {
-        this.cachedVulnerabilities = hydrated;
-        this.lastFetchAt = Date.now();
-      }
-
-      cachePruner.schedule(this.settings.cacheStorage);
-
-      if (migration.removedLegacyFields) {
-        this.settings = normalizeRuntimeSettings({
-          ...this.settings,
-          sourceSyncCursor: {}
-        });
-        await this.saveSettings();
-      }
-    } catch (error) {
-      this.persistentCacheServices = null;
-      console.warn('[vulndash.cache.persistence_unavailable]', error);
+      await this.saveSettings();
     }
   }
   private async loadSettings(): Promise<void> {
@@ -1649,57 +1060,57 @@ export default class VulnDashPlugin extends Plugin {
     this.loadedPluginData = loadedSettings;
     const loadedNvd = loadedSettings?.nvdApiKey ?? '';
     const loadedGithub = loadedSettings?.githubToken ?? '';
-    const nvdSecret = await this.loadSecret(loadedNvd);
-    const githubSecret = await this.loadSecret(loadedGithub);
+    const nvdSecret = await this.credentialStore.read(loadedNvd);
+    const githubSecret = await this.credentialStore.read(loadedGithub);
 
     const loadedFeeds = await Promise.all((loadedSettings?.feeds ?? []).map(async (feed) => {
-      if (feed.type === 'nvd') {
-        const apiKeySecret = await this.loadSecret(feed.apiKey ?? '');
+      if (feed.type === FEED_TYPES.NVD) {
+        const apiKeySecret = await this.credentialStore.read(feed.apiKey ?? '');
         return {
           ...feed,
           apiKey: apiKeySecret.value
         };
       }
 
-      const tokenSecret = await this.loadSecret(feed.token ?? '');
+      const tokenSecret = await this.credentialStore.read(feed.token ?? '');
       return {
         ...feed,
         token: tokenSecret.value
       };
     }));
 
-    const migrated = migrateLegacySettings({
+    const migration = this.getAppModule().settingsMigrator.migrate({
       ...(loadedSettings ?? {}),
       nvdApiKey: nvdSecret.value,
       githubToken: githubSecret.value,
       feeds: loadedFeeds
     });
-    this.settings = migrated;
+    this.settings = migration.settings;
     this.invalidateSyncService();
 
     if (nvdSecret.decryptionFailed || githubSecret.decryptionFailed) {
       new Notice('VulnDash could not decrypt one or more stored API keys. Please re-enter your keys.');
     }
 
-    if (nvdSecret.needsMigration || githubSecret.needsMigration || (loadedSettings?.settingsVersion ?? 0) < SETTINGS_VERSION) {
+    if (nvdSecret.needsMigration || githubSecret.needsMigration || migration.didMigrate) {
       await this.saveSettings();
     }
   }
 
   private async saveSettings(): Promise<void> {
-    const encryptedNvd = await this.serializeSecret(this.settings.nvdApiKey);
-    const encryptedGithub = await this.serializeSecret(this.settings.githubToken);
+    const encryptedNvd = await this.credentialStore.serialize(this.settings.nvdApiKey);
+    const encryptedGithub = await this.credentialStore.serialize(this.settings.githubToken);
     const feeds = await Promise.all(this.settings.feeds.map(async (feed) => {
-      if (feed.type === 'nvd') {
+      if (feed.type === FEED_TYPES.NVD) {
         return {
           ...feed,
-          apiKey: await this.serializeSecret(feed.apiKey ?? '')
+          apiKey: await this.credentialStore.serialize(feed.apiKey ?? '')
         };
       }
       if (feed.token) {
         return {
           ...feed,
-          token: await this.serializeSecret(feed.token)
+          token: await this.credentialStore.serialize(feed.token)
         };
       }
       return { ...feed };
@@ -1714,35 +1125,6 @@ export default class VulnDashPlugin extends Plugin {
     }, feeds);
 
     await this.saveData(dataToSave);
-  }
-
-  private async serializeSecret(secret: string): Promise<string> {
-    if (!secret) {
-      return '';
-    }
-    const encrypted = await encryptSecret(secret);
-    if (!encrypted) {
-      return '';
-    }
-    return `${ENCRYPTED_SECRET_PREFIX}${encrypted}`;
-  }
-
-  private async loadSecret(secret: string): Promise<{ value: string; needsMigration: boolean; decryptionFailed: boolean }> {
-    if (!secret) {
-      return { value: '', needsMigration: false, decryptionFailed: false };
-    }
-
-    if (!secret.startsWith(ENCRYPTED_SECRET_PREFIX)) {
-      return { value: secret, needsMigration: true, decryptionFailed: false };
-    }
-
-    const encryptedPayload = secret.slice(ENCRYPTED_SECRET_PREFIX.length);
-    const decrypted = await decryptSecret(encryptedPayload);
-    if (decrypted.status === 'success') {
-      return { value: decrypted.value, needsMigration: false, decryptionFailed: false };
-    }
-
-    return { value: '', needsMigration: false, decryptionFailed: true };
   }
 
   private async applySettings(
@@ -1778,28 +1160,24 @@ export default class VulnDashPlugin extends Plugin {
     await this.processData(this.cachedVulnerabilities);
   }
 
-  private getSbomImportService(): SbomImportService {
-    if (!this.sbomImportService) {
-      this.sbomImportService = new SbomImportService(
-        this.app.vault.adapter,
-        undefined,
-        new ComponentNoteResolverFactory(this.app.vault, this.app.metadataCache)
-      );
-    }
-    return this.sbomImportService;
-  }
-
-  private getProjectNoteLookupService(): ProjectNoteLookupService {
-    if (!this.projectNoteLookupService) {
-      this.projectNoteLookupService = new ProjectNoteLookupService(this.app.vault);
+  private getAppModule(): VulnDashAppModule {
+    if (!this.appModule) {
+      this.appModule = VulnDashAppModule.create({
+        getActiveWorkspacePurls: async () => this.getActiveWorkspacePurls(),
+        getSboms: () => this.settings.sboms,
+        metadataCache: this.app.metadataCache,
+        normalizePath,
+        updateSbomConfig: async (sbomId, updates) => this.updateSbomConfig(sbomId, updates),
+        vault: this.app.vault
+      });
     }
 
-    return this.projectNoteLookupService;
+    return this.appModule;
   }
 
   private registerMarkdownNotePathObservers(): void {
     const invalidateComponentNotePaths = (): void => {
-      this.getSbomImportService().invalidateAllCaches();
+      this.getAppModule().invalidateMarkdownNotePathCaches();
       this.updateViewSettings();
     };
 

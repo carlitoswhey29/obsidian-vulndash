@@ -5,6 +5,7 @@ import { buildFeedsFromConfig } from '../../../src/infrastructure/factories/Feed
 import { OsvFeedClient } from '../../../src/infrastructure/clients/osv/OsvFeedClient';
 import type { IOsvQueryCache } from '../../../src/infrastructure/clients/osv/IOsvQueryCache';
 import type { FeedConfig } from '../../../src/application/use-cases/types';
+import { BUILT_IN_FEEDS, FEED_TYPES } from '../../../src/domain/feeds/FeedTypes';
 import type { PersistedComponentQueryRecord } from '../../../src/infrastructure/storage/VulnCacheSchema';
 import type { Vulnerability } from '../../../src/domain/entities/Vulnerability';
 
@@ -26,39 +27,43 @@ const controls = {
 
 test('builds only enabled feeds and skips invalid config entries', () => {
   const configs: FeedConfig[] = [
-    { id: 'nvd-default', name: 'NVD', type: 'nvd', enabled: true, apiKey: 'k' },
-    { id: 'github-default', name: 'GitHub', type: 'github_advisory', enabled: false, token: 'x' },
-    { id: 'repo-feed', name: 'Repo feed', type: 'github_repo', enabled: true, repoPath: 'Owner/Repo', token: 'x' },
-    { id: 'generic-invalid', name: 'Custom', type: 'generic_json', enabled: true, url: '   ' },
+    { id: BUILT_IN_FEEDS.NVD.id, name: BUILT_IN_FEEDS.NVD.name, type: FEED_TYPES.NVD, enabled: true, apiKey: 'k' },
+    { id: 'github-default', name: 'GitHub', type: FEED_TYPES.GITHUB_ADVISORY, enabled: false, token: 'x' },
+    { id: 'repo-feed', name: 'Repo feed', type: FEED_TYPES.GITHUB_REPO, enabled: true, repoPath: 'Owner/Repo', token: 'x' },
+    { id: 'generic-invalid', name: 'Custom', type: FEED_TYPES.GENERIC_JSON, enabled: true, url: '   ' },
     {
-      id: 'osv-default',
-      name: 'OSV',
-      type: 'osv',
+      id: BUILT_IN_FEEDS.OSV.id,
+      name: BUILT_IN_FEEDS.OSV.name,
+      type: FEED_TYPES.OSV,
       enabled: true,
       cacheTtlMs: 21_600_000,
       negativeCacheTtlMs: 3_600_000,
       requestTimeoutMs: 15_000,
-      maxConcurrentBatches: 4
+      maxConcurrentBatches: 4,
+      osvEndpointUrl: 'https://api.osv.dev/v1/querybatch',
+      osvMaxBatchSize: 1000
     }
   ];
 
   const feeds = buildFeedsFromConfig(configs, httpClient, controls);
 
   assert.equal(feeds.length, 2);
-  assert.deepEqual(feeds.map((feed) => feed.id), ['nvd-default', 'repo-feed']);
+  assert.deepEqual(feeds.map((feed) => feed.id), [BUILT_IN_FEEDS.NVD.id, 'repo-feed']);
 });
 
 test('builds an OSV feed when runtime dependencies are provided', async () => {
   const configs: FeedConfig[] = [
     {
-      id: 'osv-default',
-      name: 'OSV',
-      type: 'osv',
+      id: BUILT_IN_FEEDS.OSV.id,
+      name: BUILT_IN_FEEDS.OSV.name,
+      type: FEED_TYPES.OSV,
       enabled: true,
       cacheTtlMs: 21_600_000,
       negativeCacheTtlMs: 3_600_000,
       requestTimeoutMs: 15_000,
-      maxConcurrentBatches: 4
+      maxConcurrentBatches: 4,
+      osvEndpointUrl: 'https://api.osv.dev/v1/querybatch',
+      osvMaxBatchSize: 1000
     }
   ];
   const seenPurls: string[][] = [];
@@ -133,17 +138,19 @@ test('builds an OSV feed when runtime dependencies are provided', async () => {
 
 test('building an OSV feed does not affect existing feed construction', () => {
   const configs: FeedConfig[] = [
-    { id: 'nvd-default', name: 'NVD', type: 'nvd', enabled: true, apiKey: 'k' },
-    { id: 'github-default', name: 'GitHub', type: 'github_advisory', enabled: true, token: 'x' },
+    { id: BUILT_IN_FEEDS.NVD.id, name: BUILT_IN_FEEDS.NVD.name, type: FEED_TYPES.NVD, enabled: true, apiKey: 'k' },
+    { id: 'github-default', name: 'GitHub', type: FEED_TYPES.GITHUB_ADVISORY, enabled: true, token: 'x' },
     {
-      id: 'osv-default',
-      name: 'OSV',
-      type: 'osv',
+      id: BUILT_IN_FEEDS.OSV.id,
+      name: BUILT_IN_FEEDS.OSV.name,
+      type: FEED_TYPES.OSV,
       enabled: true,
       cacheTtlMs: 21_600_000,
       negativeCacheTtlMs: 3_600_000,
       requestTimeoutMs: 15_000,
-      maxConcurrentBatches: 4
+      maxConcurrentBatches: 4,
+      osvEndpointUrl: 'https://api.osv.dev/v1/querybatch',
+      osvMaxBatchSize: 1000
     }
   ];
 
@@ -167,5 +174,5 @@ test('building an OSV feed does not affect existing feed construction', () => {
     }
   });
 
-  assert.deepEqual(feeds.map((feed) => feed.id), ['nvd-default', 'github-default', 'osv-default']);
+  assert.deepEqual(feeds.map((feed) => feed.id), [BUILT_IN_FEEDS.NVD.id, 'github-default', BUILT_IN_FEEDS.OSV.id]);
 });

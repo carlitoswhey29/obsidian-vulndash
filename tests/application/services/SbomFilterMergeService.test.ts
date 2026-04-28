@@ -86,16 +86,16 @@ const createRuntimeState = (names: Array<{ normalizedName: string; originalName:
   document: {
     components: names.map((component, index) => ({
       cweGroups: [],
-      dataview: {
-        cweList: [],
+      id: `${component.originalName}-${index}`,
+      name: component.originalName,
+      vulnerabilities: [],
+      vulnerabilityCount: 0,
+      vulnerabilitySummary: {
+        cweIds: [],
         severities: [],
         vulnerabilityCount: 0,
         vulnerabilityIds: []
       },
-      id: `${component.originalName}-${index}`,
-      name: component.originalName,
-      vulnerabilities: [],
-      vulnerabilityCount: 0
     })),
     format: 'cyclonedx',
     name: 'Test SBOM',
