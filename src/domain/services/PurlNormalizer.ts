@@ -9,6 +9,7 @@ export class PurlNormalizer {
      * - Preserve version casing and content as much as possible
      * - Normalize qualifiers deterministically by lowercasing keys and sorting entries
      * - Keep delimiters structural: ?, &, =, #, /, @ are controlled only by reconstruction
+     * - Regex: ^pkg:[-a-zA-Z0-9.+/]+@?[-a-zA-Z0-9.+/]*$
      */
     public static normalize(purl: string | undefined | null): string | undefined {
         if (purl == null) {
