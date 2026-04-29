@@ -12,7 +12,7 @@ test('OSV mapper prefers parseable CVSS severity over weaker fallbacks', () => {
     severity: [
       {
         type: 'CVSS_V3',
-        score: '9.8'
+        score: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H'
       }
     ],
     database_specific: {
@@ -23,6 +23,44 @@ test('OSV mapper prefers parseable CVSS severity over weaker fallbacks', () => {
   assert.equal(vulnerability.id, 'OSV-2026-1000');
   assert.equal(vulnerability.cvssScore, 9.8);
   assert.equal(vulnerability.severity, 'CRITICAL');
+});
+
+test('OSV mapper still accepts numeric CVSS payloads when present', () => {
+  const mapper = new OsvMapper('OSV');
+
+  const vulnerability = mapper.normalize({
+    id: 'OSV-2026-1001',
+    modified: '2026-04-22T00:00:00.000Z',
+    summary: 'High issue',
+    severity: [
+      {
+        type: 'CVSS_V3',
+        score: '7.5'
+      }
+    ]
+  });
+
+  assert.equal(vulnerability.cvssScore, 7.5);
+  assert.equal(vulnerability.severity, 'HIGH');
+});
+
+test('OSV mapper parses CVSS v2 vector strings', () => {
+  const mapper = new OsvMapper('OSV');
+
+  const vulnerability = mapper.normalize({
+    id: 'OSV-2026-1002',
+    modified: '2026-04-22T00:00:00.000Z',
+    summary: 'Legacy ecosystem issue',
+    severity: [
+      {
+        type: 'CVSS_V2',
+        score: 'AV:N/AC:L/Au:N/C:P/I:P/A:P'
+      }
+    ]
+  });
+
+  assert.equal(vulnerability.cvssScore, 7.5);
+  assert.equal(vulnerability.severity, 'HIGH');
 });
 
 test('OSV mapper normalizes severity aliases and preserves package metadata without throwing on sparse payloads', () => {

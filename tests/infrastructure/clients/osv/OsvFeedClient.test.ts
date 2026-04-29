@@ -387,6 +387,28 @@ test('failed requests do not create false miss records', async () => {
   assert.deepEqual(result.warnings, ['partial_failure']);
 });
 
+test('truncated batch responses are treated as partial failures instead of clean misses', async () => {
+  const queryCache = new FakeOsvQueryCache();
+  const activePurl = 'pkg:npm/a@1.0.0';
+  const httpClient = new FakeHttpClient([
+    async () => ({
+      status: 200,
+      headers: {},
+      data: {
+        results: []
+      }
+    })
+  ]);
+  const client = createClient(httpClient, queryCache, async () => [activePurl]);
+
+  const result = await client.fetchVulnerabilities({ signal: new AbortController().signal });
+
+  assert.deepEqual(result.vulnerabilities, []);
+  assert.deepEqual(result.warnings, ['partial_failure']);
+  assert.equal(queryCache.savedRecords[0]?.purl, activePurl);
+  assert.equal(queryCache.savedRecords[0]?.resultState, 'error');
+});
+
 test('partial failure preserves successful results', async () => {
   const queryCache = new FakeOsvQueryCache();
   const cachedFallbackKey = buildOsvVulnerabilityCacheKey('OSV-2026-10', 'osv-default');

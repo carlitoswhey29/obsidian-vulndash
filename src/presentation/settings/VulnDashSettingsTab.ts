@@ -74,7 +74,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           enableNvdFeed: value,
-          feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd' ? { ...feed, enabled: value } : feed))
+          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD ? { ...feed, enabled: value } : feed))
         });
       }));
 
@@ -89,7 +89,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
             const current = this.plugin.getSettings();
             await this.plugin.updateSettings({
               ...current,
-              feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+              feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD
                 ? { ...feed, dateFilterType: value as 'modified' | 'published' }
                 : feed))
             });
@@ -108,7 +108,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           nvdApiKey: nextKey,
-          feeds: current.feeds.map((feed) => (feed.id === 'nvd-default' && feed.type === 'nvd'
+          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD
             ? { ...feed, apiKey: nextKey }
             : feed))
         });
@@ -124,7 +124,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           enableGithubFeed: value,
-          feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default' && feed.type === 'github_advisory' ? { ...feed, enabled: value } : feed))
+          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id && feed.type === FEED_TYPES.GITHUB_ADVISORY ? { ...feed, enabled: value } : feed))
         });
       }));
 
@@ -140,7 +140,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
         await this.plugin.updateSettings({
           ...current,
           githubToken: nextToken,
-          feeds: current.feeds.map((feed) => (feed.id === 'github-advisories-default' && feed.type === 'github_advisory'
+          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id && feed.type === FEED_TYPES.GITHUB_ADVISORY
             ? { ...feed, token: nextToken }
             : feed))
         });
@@ -155,9 +155,65 @@ export class VulnDashSettingTab extends PluginSettingTab {
         const current = this.plugin.getSettings();
         await this.plugin.updateSettings({
           ...current,
-          feeds: current.feeds.map((feed) => (feed.id === 'osv-default' && feed.type === 'osv' ? { ...feed, enabled: value } : feed))
+          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV ? { ...feed, enabled: value } : feed))
         });
       }));
+
+    const osvEndpointSetting = new Setting(containerEl)
+      .setName('OSV batch endpoint URL')
+      .setDesc('Full HTTP(S) querybatch endpoint. Leave blank to use the public OSV API default.');
+    this.bindBlurPersistedText(osvEndpointSetting, {
+      initialValue: getOsvFeed(settings)?.osvEndpointUrl ?? DEFAULT_OSV_ENDPOINT_URL,
+      persist: async (value, committedValue) => {
+        const trimmed = value.trim();
+        const nextEndpointUrl = trimmed.length === 0
+          ? DEFAULT_OSV_ENDPOINT_URL
+          : parseConfiguredOsvEndpointUrl(trimmed);
+        if (!nextEndpointUrl) {
+          new Notice('OSV endpoint must be a valid absolute HTTP(S) URL.');
+          return committedValue;
+        }
+
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
+              ? { ...feed, osvEndpointUrl: nextEndpointUrl }
+              : feed
+          ))
+        });
+        return nextEndpointUrl;
+      }
+    });
+
+    const osvBatchSizeSetting = new Setting(containerEl)
+      .setName('OSV max batch size')
+      .setDesc(`Queries per OSV batch request. Leave blank to reset to ${DEFAULT_OSV_MAX_BATCH_SIZE}.`);
+    this.bindBlurPersistedText(osvBatchSizeSetting, {
+      initialValue: String(getOsvFeed(settings)?.osvMaxBatchSize ?? DEFAULT_OSV_MAX_BATCH_SIZE),
+      persist: async (value, committedValue) => {
+        const trimmed = value.trim();
+        const nextBatchSize = trimmed.length === 0
+          ? DEFAULT_OSV_MAX_BATCH_SIZE
+          : parseConfiguredOsvMaxBatchSize(trimmed);
+        if (nextBatchSize === null) {
+          new Notice(`OSV max batch size must be an integer between 1 and ${MAX_CONFIGURABLE_OSV_BATCH_SIZE}.`);
+          return committedValue;
+        }
+
+        const current = this.plugin.getSettings();
+        await this.plugin.updateSettings({
+          ...current,
+          feeds: current.feeds.map((feed) => (
+            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
+              ? { ...feed, osvMaxBatchSize: nextBatchSize }
+              : feed
+          ))
+        });
+        return String(nextBatchSize);
+      }
+    });
   }
 
   private renderFilteringAndSboms(containerEl: HTMLElement, settings: VulnDashSettings): void {
@@ -352,154 +408,6 @@ export class VulnDashSettingTab extends PluginSettingTab {
     }
   }
 
-  private renderSbomSettings(containerEl: HTMLElement, settings: VulnDashSettings): void {
-    containerEl.createEl('h3', { text: 'SBOM Management' });
-
-    new Setting(containerEl)
-      .setName('SBOM import mode')
-      .setDesc('Replace uses SBOM-derived filters only. Append keeps manual filters and SBOM-derived filters together.')
-      .addDropdown((dropdown) => {
-        dropdown
-          .addOptions({ append: 'Append manual + SBOM', replace: 'Replace with SBOM only' })
-          .setValue(settings.sbomImportMode)
-          .onChange(async (value) => {
-            await this.plugin.updateLocalSettings({
-              ...this.plugin.getSettings(),
-              sbomImportMode: value as VulnDashSettings['sbomImportMode']
-            });
-            this.display();
-          });
-      });
-
-    const summarySetting = new Setting(containerEl)
-      .setName('SBOM workspace')
-      .setDesc(this.formatSbomSummaryText(summarizeSbomWorkspace(settings.sboms)))
-      .addButton((button) => {
-        button.setCta().setButtonText('Manage SBOMs').onClick(() => {
-          new SbomManagerModal(this.plugin, () => this.display()).open();
-        });
-      });
-
-    void this.refreshSbomSummary(summarySetting);
-  }
-
-  private renderFeedSettings(containerEl: HTMLElement, settings: VulnDashSettings): void {
-    containerEl.createEl('h3', { text: 'Advanced Filtering' });
-
-    new Setting(containerEl)
-      .setName('Enable NVD feed')
-      .addToggle((toggle) => toggle.setValue(getNvdFeed(settings)?.enabled ?? false).onChange(async (value) => {
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          enableNvdFeed: value,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD ? { ...feed, enabled: value } : feed
-          ))
-        });
-      }));
-
-    new Setting(containerEl)
-      .setName('NVD date filter field')
-      .setDesc('Controls whether NVD sync windows use last modified timestamps or published timestamps.')
-      .addDropdown((dropdown) => {
-        dropdown
-          .addOptions({ modified: 'Modified Time', published: 'Published Time' })
-          .setValue(getNvdFeed(settings)?.dateFilterType ?? 'modified')
-          .onChange(async (value) => {
-            const current = this.plugin.getSettings();
-            await this.plugin.updateSettings({
-              ...current,
-              feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD
-                ? { ...feed, dateFilterType: value as 'modified' | 'published' }
-                : feed))
-            });
-          });
-      });
-
-    new Setting(containerEl)
-      .setName('Enable GitHub advisories feed')
-      .addToggle((toggle) => toggle.setValue(getGitHubAdvisoryFeed(settings)?.enabled ?? false).onChange(async (value) => {
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          enableGithubFeed: value,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id && feed.type === FEED_TYPES.GITHUB_ADVISORY
-              ? { ...feed, enabled: value }
-              : feed
-          ))
-        });
-      }));
-
-    new Setting(containerEl)
-      .setName('Enable OSV feed')
-      .addToggle((toggle) => toggle.setValue(getOsvFeed(settings)?.enabled ?? false).onChange(async (value) => {
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV ? { ...feed, enabled: value } : feed
-          ))
-        });
-      }));
-
-    const osvEndpointSetting = new Setting(containerEl)
-      .setName('OSV batch endpoint URL')
-      .setDesc('Full HTTP(S) querybatch endpoint. Leave blank to use the public OSV API default.');
-    this.bindBlurPersistedText(osvEndpointSetting, {
-      initialValue: getOsvFeed(settings)?.osvEndpointUrl ?? DEFAULT_OSV_ENDPOINT_URL,
-      persist: async (value, committedValue) => {
-        const trimmed = value.trim();
-        const nextEndpointUrl = trimmed.length === 0
-          ? DEFAULT_OSV_ENDPOINT_URL
-          : parseConfiguredOsvEndpointUrl(trimmed);
-        if (!nextEndpointUrl) {
-          new Notice('OSV endpoint must be a valid absolute HTTP(S) URL.');
-          return committedValue;
-        }
-
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
-              ? { ...feed, osvEndpointUrl: nextEndpointUrl }
-              : feed
-          ))
-        });
-        return nextEndpointUrl;
-      }
-    });
-
-    const osvBatchSizeSetting = new Setting(containerEl)
-      .setName('OSV max batch size')
-      .setDesc(`Queries per OSV batch request. Leave blank to reset to ${DEFAULT_OSV_MAX_BATCH_SIZE}.`);
-    this.bindBlurPersistedText(osvBatchSizeSetting, {
-      initialValue: String(getOsvFeed(settings)?.osvMaxBatchSize ?? DEFAULT_OSV_MAX_BATCH_SIZE),
-      persist: async (value, committedValue) => {
-        const trimmed = value.trim();
-        const nextBatchSize = trimmed.length === 0
-          ? DEFAULT_OSV_MAX_BATCH_SIZE
-          : parseConfiguredOsvMaxBatchSize(trimmed);
-        if (nextBatchSize === null) {
-          new Notice(`OSV max batch size must be an integer between 1 and ${MAX_CONFIGURABLE_OSV_BATCH_SIZE}.`);
-          return committedValue;
-        }
-
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
-              ? { ...feed, osvMaxBatchSize: nextBatchSize }
-              : feed
-          ))
-        });
-        return String(nextBatchSize);
-      }
-    });
-
   private renderDailyBriefing(containerEl: HTMLElement, settings: VulnDashSettings): void {
     containerEl.createEl('h3', { text: 'Daily Threat Briefing' });
 
@@ -583,45 +491,6 @@ export class VulnDashSettingTab extends PluginSettingTab {
     }
   }
 
-    const nvdKeySetting = new Setting(containerEl)
-      .setName('NVD API key')
-      .setDesc('Optional. Key is stored in plugin data; avoid sharing vault config.');
-    this.bindBlurPersistedText(nvdKeySetting, {
-      initialValue: getNvdFeed(settings)?.apiKey ?? settings.nvdApiKey,
-      inputType: 'password',
-      persist: async (value) => {
-        const nextKey = value.trim();
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          nvdApiKey: nextKey,
-          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.NVD.id && feed.type === FEED_TYPES.NVD
-            ? { ...feed, apiKey: nextKey }
-            : feed))
-        });
-        return nextKey;
-      }
-    });
-
-    const githubTokenSetting = new Setting(containerEl)
-      .setName('GitHub token')
-      .setDesc('Optional fine-grained token for higher API limits. Never logged by plugin.');
-    this.bindBlurPersistedText(githubTokenSetting, {
-      initialValue: getGitHubAdvisoryFeed(settings)?.token ?? settings.githubToken,
-      inputType: 'password',
-      persist: async (value) => {
-        const nextToken = value.trim();
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          githubToken: nextToken,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id && feed.type === FEED_TYPES.GITHUB_ADVISORY
-            ? { ...feed, token: nextToken }
-            : feed
-          ))
-        });
-        return nextToken;
   private renderAdvancedSyncAndPerformance(containerEl: HTMLElement, settings: VulnDashSettings): void {
     containerEl.createEl('h3', { text: 'Advanced Sync & Performance' });
 

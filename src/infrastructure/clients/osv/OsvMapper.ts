@@ -6,6 +6,7 @@ import type {
 } from '../../../domain/entities/Vulnerability';
 import type { Severity } from '../../../domain/value-objects/Severity';
 import { classifySeverity } from '../../../domain/value-objects/CvssScore';
+import { parseCvssScore } from '../../../domain/services/CvssVectorParser';
 import { PurlNormalizer } from '../../../domain/services/PurlNormalizer';
 import { sanitizeMarkdown, sanitizeText, sanitizeUrl } from '../../security/sanitize';
 import type { OsvAffectedPayload, OsvSeverityPayload, OsvVulnerabilityPayload } from './OsvTypes';
@@ -79,12 +80,7 @@ const extractNumericCvssScore = (severity: OsvSeverityPayload): number | undefin
     return undefined;
   }
 
-  const parsed = Number.parseFloat(severity.score);
-  if (Number.isFinite(parsed) && parsed >= 0) {
-    return parsed;
-  }
-
-  return undefined;
+  return parseCvssScore(severity.score, severity.type);
 };
 
 const collectSeverityPayloads = (payload: OsvVulnerabilityPayload): OsvSeverityPayload[] => [
