@@ -1,3 +1,6 @@
+/* ==========================================================================
+   1. BASE TABLES & TYPOGRAPHY
+   ========================================================================== */
 .vulndash-table {
   width: 100%;
   border-collapse: collapse;
@@ -47,6 +50,9 @@
   font-weight: 500;
 }
 
+/* ==========================================================================
+   2. HEADERS, CONTROLS & TABS
+   ========================================================================== */
 .vulndash-header {
   display: flex;
   justify-content: space-between;
@@ -104,6 +110,9 @@
   color: var(--text-on-accent);
 }
 
+/* ==========================================================================
+   3. MAIN VIEWS & VIRTUALIZATION
+   ========================================================================== */
 .vulndash-view {
   display: flex;
   flex-direction: column;
@@ -157,6 +166,9 @@
   box-shadow: 0 1px 0 color-mix(in srgb, var(--background-modifier-border) 45%, transparent);
 }
 
+/* ==========================================================================
+   4. VULNERABILITY TOOLBAR & SEARCH
+   ========================================================================== */
 .vulndash-vulnerability-toolbar {
   display: grid;
   gap: 0.5rem;
@@ -208,6 +220,9 @@
   font-size: var(--font-ui-smaller);
 }
 
+/* ==========================================================================
+   5. ROW BOUNDARIES, EXPAND STATES & MARKDOWN
+   ========================================================================== */
 /* --- ROW BOUNDARIES & HOVER STATES --- */
 .vulndash-item-boundary td {
   border-top: 1px solid var(--background-modifier-border);
@@ -343,6 +358,9 @@
   }
 }
 
+/* ==========================================================================
+   6. MODALS & EMPTY STATES
+   ========================================================================== */
 .vulndash-modal-header {
   margin-bottom: 1rem;
 }
@@ -377,6 +395,9 @@
   color: var(--text-muted);
 }
 
+/* ==========================================================================
+   7. SBOM WORKSPACE, SUMMARIES & METRICS
+   ========================================================================== */
 .vulndash-sbom-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -648,6 +669,9 @@
   font-size: var(--font-ui-smaller);
 }
 
+/* ==========================================================================
+   8. PRODUCT FILTERS
+   ========================================================================== */
 .vulndash-product-filters-card {
   display: grid;
   gap: 0.75rem;
@@ -791,6 +815,9 @@
   font-size: var(--font-ui-medium);
 }
 
+/* ==========================================================================
+   9. COMPONENT INVENTORY, TABLES & STATES
+   ========================================================================== */
 .vulndash-component-inventory-view {
   display: grid;
   gap: 1rem;
@@ -1166,8 +1193,9 @@
   }
 }
 
-
-
+/* ==========================================================================
+   10. TRIAGE CONTROLS & STATES
+   ========================================================================== */
 .vulndash-triage-filter {
   display: flex;
   flex-direction: column;
@@ -1230,8 +1258,10 @@
   color: #4d5563;
 }
 
+/* ==========================================================================
+   11. COMPONENT DETAILS & TEXT FORMATTING
+   ========================================================================== */
 /* --- Added .vulndash-component-details changes --- */
-
 .vulndash-component-details,
 .vulndash-component-details-host {
   padding: 0.75rem 1rem;

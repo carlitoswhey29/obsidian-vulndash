@@ -1,5 +1,5 @@
 import type { Vulnerability } from '../../domain/entities/Vulnerability';
-import type { SyncResult } from './SyncJobScheduler';
+import type { SyncResult } from './SyncVulnerabilitiesUseCase';
 
 export interface FeedSyncSummary {
   source: string;

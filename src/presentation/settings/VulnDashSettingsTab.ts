@@ -7,39 +7,54 @@ import {
   parseConfiguredOsvEndpointUrl,
   parseConfiguredOsvMaxBatchSize
 } from '../../application/use-cases/DefaultSettings';
-import type { ColumnVisibility, VulnDashSettings, ImportedSbomConfig } from '../../application/use-cases/types';
+import type { ColumnVisibility, ImportedSbomConfig, VulnDashSettings } from '../../application/use-cases/types';
+import { summarizeSbomWorkspace } from '../../application/use-cases/SbomWorkspaceService';
 import { BUILT_IN_FEEDS, FEED_TYPES } from '../../domain/feeds/FeedTypes';
 import { TRIAGE_STATES, formatTriageStateLabel } from '../../domain/triage/TriageState';
-import { summarizeSbomWorkspace } from '../../application/use-cases/SbomWorkspaceService';
-import VulnDashPlugin from '../plugin/VulnDashPlugin';
 import { ProductFiltersModal } from '../modals/ProductFiltersModal';
 import { SbomManagerModal } from '../modals/SbomManagerModal';
+import VulnDashPlugin from '../plugin/VulnDashPlugin';
 
 interface ComputedProductFiltersSummaryData {
   activeFilterCount: number;
   contributingSbomCount: number;
+  enabledSbomCount: number;
+  filters: string[];
   groups: Array<{
     filters: string[];
     label: string;
     sbomId: string;
   }>;
   manualFilterCount: number;
-  enabledSbomCount: number;
-  filters: string[];
 }
+
+type PersistTextValue = (value: string, committedValue: string) => Promise<string>;
+
+type NvdFeed = Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.NVD }>;
+type GitHubAdvisoryFeed = Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.GITHUB_ADVISORY }>;
+type OsvFeed = Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.OSV }>;
 
 const PRODUCT_FILTER_PREVIEW_LIMIT = 5;
 const BUTTON_FEEDBACK_MS = 1_200;
+const SAVED_FEEDBACK_MS = 600;
 
-const getNvdFeed = (settings: VulnDashSettings) =>
-  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.NVD }> =>
+const getNvdFeed = (settings: VulnDashSettings): NvdFeed | undefined =>
+  settings.feeds.find((feed): feed is NvdFeed =>
     feed.type === FEED_TYPES.NVD && feed.id === BUILT_IN_FEEDS.NVD.id);
-const getGitHubAdvisoryFeed = (settings: VulnDashSettings) =>
-  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.GITHUB_ADVISORY }> =>
+
+const getGitHubAdvisoryFeed = (settings: VulnDashSettings): GitHubAdvisoryFeed | undefined =>
+  settings.feeds.find((feed): feed is GitHubAdvisoryFeed =>
     feed.type === FEED_TYPES.GITHUB_ADVISORY && feed.id === BUILT_IN_FEEDS.GITHUB_ADVISORY.id);
-const getOsvFeed = (settings: VulnDashSettings) =>
-  settings.feeds.find((feed): feed is Extract<VulnDashSettings['feeds'][number], { type: typeof FEED_TYPES.OSV }> =>
+
+const getOsvFeed = (settings: VulnDashSettings): OsvFeed | undefined =>
+  settings.feeds.find((feed): feed is OsvFeed =>
     feed.type === FEED_TYPES.OSV && feed.id === BUILT_IN_FEEDS.OSV.id);
+
+const parseCommaSeparatedValues = (value: string): string[] =>
+  value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 
 export class VulnDashSettingTab extends PluginSettingTab {
   private computedProductFiltersRenderId = 0;
@@ -55,7 +70,6 @@ export class VulnDashSettingTab extends PluginSettingTab {
     const settings = this.plugin.getSettings();
     containerEl.createEl('h2', { text: 'VulnDash Settings' });
 
-    // Organized logical sections
     this.renderFeedsAndCredentials(containerEl, settings);
     this.renderFilteringAndSboms(containerEl, settings);
     this.renderDisplayAndNotifications(containerEl, settings);
@@ -66,7 +80,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
   private renderFeedsAndCredentials(containerEl: HTMLElement, settings: VulnDashSettings): void {
     containerEl.createEl('h3', { text: 'Vulnerability Feeds & Credentials' });
 
-    // NVD Settings
+   // NVD Settings
     new Setting(containerEl)
       .setName('Enable NVD feed')
       .addToggle((toggle) => toggle.setValue(getNvdFeed(settings)?.enabled ?? false).onChange(async (value) => {
@@ -148,16 +162,13 @@ export class VulnDashSettingTab extends PluginSettingTab {
       }
     });
 
-    // OSV Settings
     new Setting(containerEl)
       .setName('Enable OSV feed')
-      .addToggle((toggle) => toggle.setValue(getOsvFeed(settings)?.enabled ?? false).onChange(async (value) => {
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          feeds: current.feeds.map((feed) => (feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV ? { ...feed, enabled: value } : feed))
-        });
-      }));
+      .addToggle((toggle) => toggle
+        .setValue(getOsvFeed(settings)?.enabled ?? false)
+        .onChange(async (enabled) => {
+          await this.updateBuiltInFeed(BUILT_IN_FEEDS.OSV.id, FEED_TYPES.OSV, { enabled });
+        }));
 
     const osvEndpointSetting = new Setting(containerEl)
       .setName('OSV batch endpoint URL')
@@ -166,24 +177,17 @@ export class VulnDashSettingTab extends PluginSettingTab {
       initialValue: getOsvFeed(settings)?.osvEndpointUrl ?? DEFAULT_OSV_ENDPOINT_URL,
       persist: async (value, committedValue) => {
         const trimmed = value.trim();
-        const nextEndpointUrl = trimmed.length === 0
+        const endpointUrl = trimmed.length === 0
           ? DEFAULT_OSV_ENDPOINT_URL
           : parseConfiguredOsvEndpointUrl(trimmed);
-        if (!nextEndpointUrl) {
+
+        if (!endpointUrl) {
           new Notice('OSV endpoint must be a valid absolute HTTP(S) URL.');
           return committedValue;
         }
 
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
-              ? { ...feed, osvEndpointUrl: nextEndpointUrl }
-              : feed
-          ))
-        });
-        return nextEndpointUrl;
+        await this.updateBuiltInFeed(BUILT_IN_FEEDS.OSV.id, FEED_TYPES.OSV, { osvEndpointUrl: endpointUrl });
+        return endpointUrl;
       }
     });
 
@@ -194,24 +198,17 @@ export class VulnDashSettingTab extends PluginSettingTab {
       initialValue: String(getOsvFeed(settings)?.osvMaxBatchSize ?? DEFAULT_OSV_MAX_BATCH_SIZE),
       persist: async (value, committedValue) => {
         const trimmed = value.trim();
-        const nextBatchSize = trimmed.length === 0
+        const batchSize = trimmed.length === 0
           ? DEFAULT_OSV_MAX_BATCH_SIZE
           : parseConfiguredOsvMaxBatchSize(trimmed);
-        if (nextBatchSize === null) {
+
+        if (batchSize === null) {
           new Notice(`OSV max batch size must be an integer between 1 and ${MAX_CONFIGURABLE_OSV_BATCH_SIZE}.`);
           return committedValue;
         }
 
-        const current = this.plugin.getSettings();
-        await this.plugin.updateSettings({
-          ...current,
-          feeds: current.feeds.map((feed) => (
-            feed.id === BUILT_IN_FEEDS.OSV.id && feed.type === FEED_TYPES.OSV
-              ? { ...feed, osvMaxBatchSize: nextBatchSize }
-              : feed
-          ))
-        });
-        return String(nextBatchSize);
+        await this.updateBuiltInFeed(BUILT_IN_FEEDS.OSV.id, FEED_TYPES.OSV, { osvMaxBatchSize: batchSize });
+        return String(batchSize);
       }
     });
   }
@@ -235,12 +232,14 @@ export class VulnDashSettingTab extends PluginSettingTab {
       });
 
     const minCvssSetting = new Setting(containerEl)
-      .setName('Minimum CVSS score');
+      .setName('Minimum CVSS score')
+      .setDesc('Accepted range: 0.0 through 10.0.');
     this.bindBlurPersistedText(minCvssSetting, {
       initialValue: String(settings.minCvssScore),
       persist: async (value, committedValue) => {
-        const score = Number.parseFloat(value);
-        if (Number.isNaN(score) || score < 0 || score > 10) {
+        const score = Number.parseFloat(value.trim());
+        if (!Number.isFinite(score) || score < 0 || score > 10) {
+          new Notice('Minimum CVSS score must be between 0 and 10.');
           return committedValue;
         }
 
@@ -255,11 +254,8 @@ export class VulnDashSettingTab extends PluginSettingTab {
     this.bindBlurPersistedText(keywordFiltersSetting, {
       initialValue: settings.keywordFilters.join(','),
       persist: async (value) => {
-        const keywordFilters = value.split(',').map((entry) => entry.trim()).filter(Boolean);
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          keywordFilters
-        });
+        const keywordFilters = parseCommaSeparatedValues(value);
+        await this.plugin.updateSettings({ ...this.plugin.getSettings(), keywordFilters });
         return keywordFilters.join(',');
       }
     });
@@ -267,9 +263,11 @@ export class VulnDashSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Treat keywords as regular expressions')
       .setDesc('Enables advanced keyword matching with case-insensitive regex patterns.')
-      .addToggle((toggle) => toggle.setValue(settings.keywordRegexEnabled).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), keywordRegexEnabled: value });
-      }));
+      .addToggle((toggle) => toggle
+        .setValue(settings.keywordRegexEnabled)
+        .onChange(async (keywordRegexEnabled) => {
+          await this.plugin.updateSettings({ ...this.plugin.getSettings(), keywordRegexEnabled });
+        }));
 
     new Setting(containerEl)
       .setName('SBOM import mode')
@@ -291,9 +289,12 @@ export class VulnDashSettingTab extends PluginSettingTab {
       .setName('SBOM workspace')
       .setDesc(this.formatSbomSummaryText(summarizeSbomWorkspace(settings.sboms)))
       .addButton((button) => {
-        button.setCta().setButtonText('Manage SBOMs').onClick(() => {
-          new SbomManagerModal(this.plugin, () => this.display()).open();
-        });
+        button
+          .setCta()
+          .setButtonText('Manage SBOMs')
+          .onClick(() => {
+            new SbomManagerModal(this.plugin, () => this.display()).open();
+          });
       });
     void this.refreshSbomSummary(summarySetting);
 
@@ -303,7 +304,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
     this.bindBlurPersistedText(manualFiltersSetting, {
       initialValue: settings.manualProductFilters.join(','),
       persist: async (value) => {
-        const manualProductFilters = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+        const manualProductFilters = this.normalizeProductFilters(parseCommaSeparatedValues(value));
         await this.plugin.updateLocalSettings({
           ...this.plugin.getSettings(),
           manualProductFilters
@@ -321,16 +322,20 @@ export class VulnDashSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('System notifications')
       .setDesc('Show native Obsidian notices for newly matched vulnerabilities.')
-      .addToggle((toggle) => toggle.setValue(settings.systemNotificationsEnabled).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), systemNotificationsEnabled: value });
-      }));
+      .addToggle((toggle) => toggle
+        .setValue(settings.systemNotificationsEnabled)
+        .onChange(async (systemNotificationsEnabled) => {
+          await this.plugin.updateSettings({ ...this.plugin.getSettings(), systemNotificationsEnabled });
+        }));
 
     new Setting(containerEl)
       .setName('Desktop alerts for HIGH/CRITICAL')
       .setDesc('Use OS-level notifications for urgent vulnerabilities.')
-      .addToggle((toggle) => toggle.setValue(settings.desktopAlertsHighOrCritical).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), desktopAlertsHighOrCritical: value });
-      }));
+      .addToggle((toggle) => toggle
+        .setValue(settings.desktopAlertsHighOrCritical)
+        .onChange(async (desktopAlertsHighOrCritical) => {
+          await this.plugin.updateSettings({ ...this.plugin.getSettings(), desktopAlertsHighOrCritical });
+        }));
 
     const maxResultsSetting = new Setting(containerEl)
       .setName('Maximum results shown')
@@ -338,8 +343,9 @@ export class VulnDashSettingTab extends PluginSettingTab {
     this.bindBlurPersistedText(maxResultsSetting, {
       initialValue: String(settings.maxResults),
       persist: async (value, committedValue) => {
-        const maxResults = Number.parseInt(value, 10);
-        if (Number.isNaN(maxResults) || maxResults < 1) {
+        const maxResults = Number.parseInt(value.trim(), 10);
+        if (!Number.isFinite(maxResults) || maxResults < 1) {
+          new Notice('Maximum results must be at least 1.');
           return committedValue;
         }
 
@@ -379,10 +385,12 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Color-coded severity')
-      .setDesc('Applies severity CSS classes (for CRITICAL/HIGH rows).')
-      .addToggle((toggle) => toggle.setValue(settings.colorCodedSeverity).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), colorCodedSeverity: value });
-      }));
+      .setDesc('Applies severity CSS classes for severity-aware rows.')
+      .addToggle((toggle) => toggle
+        .setValue(settings.colorCodedSeverity)
+        .onChange(async (colorCodedSeverity) => {
+          await this.plugin.updateSettings({ ...this.plugin.getSettings(), colorCodedSeverity });
+        }));
 
     const columnDefs: Array<{ key: keyof ColumnVisibility; label: string }> = [
       { key: 'id', label: 'ID' },
@@ -396,15 +404,18 @@ export class VulnDashSettingTab extends PluginSettingTab {
     for (const columnDef of columnDefs) {
       new Setting(containerEl)
         .setName(`Show column: ${columnDef.label}`)
-        .addToggle((toggle) => toggle.setValue(settings.columnVisibility[columnDef.key]).onChange(async (value) => {
-          await this.plugin.updateSettings({
-            ...this.plugin.getSettings(),
-            columnVisibility: {
-              ...this.plugin.getSettings().columnVisibility,
-              [columnDef.key]: value
-            }
-          });
-        }));
+        .addToggle((toggle) => toggle
+          .setValue(settings.columnVisibility[columnDef.key])
+          .onChange(async (value) => {
+            const current = this.plugin.getSettings();
+            await this.plugin.updateSettings({
+              ...current,
+              columnVisibility: {
+                ...current.columnVisibility,
+                [columnDef.key]: value
+              }
+            });
+          }));
     }
   }
 
@@ -412,20 +423,22 @@ export class VulnDashSettingTab extends PluginSettingTab {
     containerEl.createEl('h3', { text: 'Daily Threat Briefing' });
 
     const dailyRollupFolderSetting = new Setting(containerEl)
-      .setName('Briefing folder');
+      .setName('Briefing folder')
+      .setDesc('Vault-relative folder where daily briefing notes are written.');
     this.bindBlurPersistedText(dailyRollupFolderSetting, {
       initialValue: settings.dailyRollup.folderPath,
       persist: async (value) => {
         const folder = value.trim();
-        const nextFolder = folder.length > 0 ? folder : DEFAULT_SETTINGS.dailyRollup.folderPath;
+        const folderPath = folder.length > 0 ? folder : DEFAULT_SETTINGS.dailyRollup.folderPath;
+        const current = this.plugin.getSettings();
         await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
+          ...current,
           dailyRollup: {
-            ...this.plugin.getSettings().dailyRollup,
-            folderPath: nextFolder
+            ...current.dailyRollup,
+            folderPath
           }
         });
-        return nextFolder;
+        return folderPath;
       }
     });
 
@@ -437,10 +450,11 @@ export class VulnDashSettingTab extends PluginSettingTab {
           .addOptions({ LOW: 'LOW', MEDIUM: 'MEDIUM', HIGH: 'HIGH', CRITICAL: 'CRITICAL' })
           .setValue(settings.dailyRollup.severityThreshold)
           .onChange(async (value) => {
+            const current = this.plugin.getSettings();
             await this.plugin.updateSettings({
-              ...this.plugin.getSettings(),
+              ...current,
               dailyRollup: {
-                ...this.plugin.getSettings().dailyRollup,
+                ...current.dailyRollup,
                 severityThreshold: value as VulnDashSettings['dailyRollup']['severityThreshold']
               }
             });
@@ -450,44 +464,54 @@ export class VulnDashSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Include unmapped findings')
       .setDesc('Keeps findings without a mapped project note in the dedicated Unmapped Findings section.')
-      .addToggle((toggle) => toggle.setValue(settings.dailyRollup.includeUnmappedFindings).onChange(async (value) => {
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          dailyRollup: {
-            ...this.plugin.getSettings().dailyRollup,
-            includeUnmappedFindings: value
-          }
-        });
-      }));
+      .addToggle((toggle) => toggle
+        .setValue(settings.dailyRollup.includeUnmappedFindings)
+        .onChange(async (includeUnmappedFindings) => {
+          const current = this.plugin.getSettings();
+          await this.plugin.updateSettings({
+            ...current,
+            dailyRollup: {
+              ...current.dailyRollup,
+              includeUnmappedFindings
+            }
+          });
+        }));
 
     new Setting(containerEl)
       .setName('Auto-generate on first sync of day')
       .setDesc('Writes or refreshes the daily briefing automatically after the first successful sync for the current day.')
-      .addToggle((toggle) => toggle.setValue(settings.dailyRollup.autoGenerateOnFirstSyncOfDay).onChange(async (value) => {
-        await this.plugin.updateSettings({
-          ...this.plugin.getSettings(),
-          dailyRollup: {
-            ...this.plugin.getSettings().dailyRollup,
-            autoGenerateOnFirstSyncOfDay: value
-          }
-        });
-      }));
+      .addToggle((toggle) => toggle
+        .setValue(settings.dailyRollup.autoGenerateOnFirstSyncOfDay)
+        .onChange(async (autoGenerateOnFirstSyncOfDay) => {
+          const current = this.plugin.getSettings();
+          await this.plugin.updateSettings({
+            ...current,
+            dailyRollup: {
+              ...current.dailyRollup,
+              autoGenerateOnFirstSyncOfDay
+            }
+          });
+        }));
 
     for (const triageState of TRIAGE_STATES) {
       new Setting(containerEl)
         .setName(`Exclude triage state: ${formatTriageStateLabel(triageState)}`)
-        .addToggle((toggle) => toggle.setValue(settings.dailyRollup.excludedTriageStates.includes(triageState)).onChange(async (value) => {
-          const excludedTriageStates = value
-            ? Array.from(new Set([...this.plugin.getSettings().dailyRollup.excludedTriageStates, triageState]))
-            : this.plugin.getSettings().dailyRollup.excludedTriageStates.filter((state) => state !== triageState);
-          await this.plugin.updateSettings({
-            ...this.plugin.getSettings(),
-            dailyRollup: {
-              ...this.plugin.getSettings().dailyRollup,
-              excludedTriageStates
-            }
-          });
-        }));
+        .addToggle((toggle) => toggle
+          .setValue(settings.dailyRollup.excludedTriageStates.includes(triageState))
+          .onChange(async (enabled) => {
+            const current = this.plugin.getSettings();
+            const excludedTriageStates = enabled
+              ? Array.from(new Set([...current.dailyRollup.excludedTriageStates, triageState]))
+              : current.dailyRollup.excludedTriageStates.filter((state) => state !== triageState);
+
+            await this.plugin.updateSettings({
+              ...current,
+              dailyRollup: {
+                ...current.dailyRollup,
+                excludedTriageStates
+              }
+            });
+          }));
     }
   }
 
@@ -497,22 +521,26 @@ export class VulnDashSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Poll on startup')
       .setDesc('Automatically start polling when the plugin loads.')
-      .addToggle((toggle) => toggle.setValue(settings.pollOnStartup).onChange(async (value) => {
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollOnStartup: value });
-      }));
+      .addToggle((toggle) => toggle
+        .setValue(settings.pollOnStartup)
+        .onChange(async (pollOnStartup) => {
+          await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollOnStartup });
+        }));
 
     const pollingIntervalSetting = new Setting(containerEl)
-      .setName('Polling interval (seconds)');
+      .setName('Polling interval (seconds)')
+      .setDesc('Minimum accepted value: 30 seconds.');
     this.bindBlurPersistedText(pollingIntervalSetting, {
-      initialValue: String(Math.floor(settings.pollingIntervalMs / 1000)),
+      initialValue: String(Math.floor(settings.pollingIntervalMs / 1_000)),
       placeholder: '60',
       persist: async (value, committedValue) => {
-        const seconds = Number.parseInt(value, 10);
-        if (Number.isNaN(seconds) || seconds < 30) {
+        const seconds = Number.parseInt(value.trim(), 10);
+        if (!Number.isFinite(seconds) || seconds < 30) {
+          new Notice('Polling interval must be at least 30 seconds.');
           return committedValue;
         }
 
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollingIntervalMs: seconds * 1000 });
+        await this.plugin.updateSettings({ ...this.plugin.getSettings(), pollingIntervalMs: seconds * 1_000 });
         return String(seconds);
       }
     });
@@ -521,99 +549,101 @@ export class VulnDashSettingTab extends PluginSettingTab {
       .setName('Cache duration (seconds)')
       .setDesc('How long fetched vulnerability data remains in memory before refresh.');
     this.bindBlurPersistedText(cacheDurationSetting, {
-      initialValue: String(Math.floor(settings.cacheDurationMs / 1000)),
+      initialValue: String(Math.floor(settings.cacheDurationMs / 1_000)),
       persist: async (value, committedValue) => {
-        const seconds = Number.parseInt(value, 10);
-        if (Number.isNaN(seconds) || seconds < 0) {
+        const seconds = Number.parseInt(value.trim(), 10);
+        if (!Number.isFinite(seconds) || seconds < 0) {
+          new Notice('Cache duration must be 0 seconds or greater.');
           return committedValue;
         }
 
-        await this.plugin.updateSettings({ ...this.plugin.getSettings(), cacheDurationMs: seconds * 1000 });
+        await this.plugin.updateSettings({ ...this.plugin.getSettings(), cacheDurationMs: seconds * 1_000 });
         return String(seconds);
       }
     });
 
     this.renderSyncControl(containerEl, 'Max pages per sync', String(settings.syncControls.maxPages), async (value, committedValue) => {
-      const maxPages = Number.parseInt(value, 10);
-      if (Number.isNaN(maxPages) || maxPages < 1) {
+      const maxPages = Number.parseInt(value.trim(), 10);
+      if (!Number.isFinite(maxPages) || maxPages < 1) {
+        new Notice('Max pages per sync must be at least 1.');
         return committedValue;
       }
 
-      await this.plugin.updateSettings({
-        ...this.plugin.getSettings(),
-        syncControls: { ...this.plugin.getSettings().syncControls, maxPages }
-      });
+      await this.updateSyncControls({ maxPages });
       return String(maxPages);
     });
+
     this.renderSyncControl(containerEl, 'Max items per sync', String(settings.syncControls.maxItems), async (value, committedValue) => {
-      const maxItems = Number.parseInt(value, 10);
-      if (Number.isNaN(maxItems) || maxItems < 1) {
+      const maxItems = Number.parseInt(value.trim(), 10);
+      if (!Number.isFinite(maxItems) || maxItems < 1) {
+        new Notice('Max items per sync must be at least 1.');
         return committedValue;
       }
 
-      await this.plugin.updateSettings({
-        ...this.plugin.getSettings(),
-        syncControls: { ...this.plugin.getSettings().syncControls, maxItems }
-      });
+      await this.updateSyncControls({ maxItems });
       return String(maxItems);
     });
+
     this.renderSyncControl(containerEl, 'Retry count', String(settings.syncControls.retryCount), async (value, committedValue) => {
-      const retryCount = Number.parseInt(value, 10);
-      if (Number.isNaN(retryCount) || retryCount < 0) {
+      const retryCount = Number.parseInt(value.trim(), 10);
+      if (!Number.isFinite(retryCount) || retryCount < 0) {
+        new Notice('Retry count must be 0 or greater.');
         return committedValue;
       }
 
-      await this.plugin.updateSettings({
-        ...this.plugin.getSettings(),
-        syncControls: { ...this.plugin.getSettings().syncControls, retryCount }
-      });
+      await this.updateSyncControls({ retryCount });
       return String(retryCount);
     });
+
     this.renderSyncControl(containerEl, 'Backoff base (ms)', String(settings.syncControls.backoffBaseMs), async (value, committedValue) => {
-      const backoffBaseMs = Number.parseInt(value, 10);
-      if (Number.isNaN(backoffBaseMs) || backoffBaseMs < 100) {
+      const backoffBaseMs = Number.parseInt(value.trim(), 10);
+      if (!Number.isFinite(backoffBaseMs) || backoffBaseMs < 100) {
+        new Notice('Backoff base must be at least 100 ms.');
         return committedValue;
       }
 
-      await this.plugin.updateSettings({
-        ...this.plugin.getSettings(),
-        syncControls: { ...this.plugin.getSettings().syncControls, backoffBaseMs }
-      });
+      await this.updateSyncControls({ backoffBaseMs });
       return String(backoffBaseMs);
     });
-    this.renderSyncControl(containerEl, 'Overlap window (seconds)', String(Math.floor(settings.syncControls.overlapWindowMs / 1000)), async (value, committedValue) => {
-      const seconds = Number.parseInt(value, 10);
-      if (Number.isNaN(seconds) || seconds < 0) {
-        return committedValue;
-      }
 
-      await this.plugin.updateSettings({
-        ...this.plugin.getSettings(),
-        syncControls: { ...this.plugin.getSettings().syncControls, overlapWindowMs: seconds * 1000 }
-      });
-      return String(seconds);
-    });
-    this.renderSyncControl(containerEl, 'Bootstrap lookback (hours)', String(Math.floor(settings.syncControls.bootstrapLookbackMs / 3_600_000)), async (value, committedValue) => {
-      const hours = Number.parseInt(value, 10);
-      if (Number.isNaN(hours) || hours < 1) {
-        return committedValue;
-      }
+    this.renderSyncControl(
+      containerEl,
+      'Overlap window (seconds)',
+      String(Math.floor(settings.syncControls.overlapWindowMs / 1_000)),
+      async (value, committedValue) => {
+        const seconds = Number.parseInt(value.trim(), 10);
+        if (!Number.isFinite(seconds) || seconds < 0) {
+          new Notice('Overlap window must be 0 seconds or greater.');
+          return committedValue;
+        }
 
-      await this.plugin.updateSettings({
-        ...this.plugin.getSettings(),
-        syncControls: { ...this.plugin.getSettings().syncControls, bootstrapLookbackMs: hours * 3_600_000 }
-      });
-      return String(hours);
-    });
+        await this.updateSyncControls({ overlapWindowMs: seconds * 1_000 });
+        return String(seconds);
+      }
+    );
+
+    this.renderSyncControl(
+      containerEl,
+      'Bootstrap lookback (hours)',
+      String(Math.floor(settings.syncControls.bootstrapLookbackMs / 3_600_000)),
+      async (value, committedValue) => {
+        const hours = Number.parseInt(value.trim(), 10);
+        if (!Number.isFinite(hours) || hours < 1) {
+          new Notice('Bootstrap lookback must be at least 1 hour.');
+          return committedValue;
+        }
+
+        await this.updateSyncControls({ bootstrapLookbackMs: hours * 3_600_000 });
+        return String(hours);
+      }
+    );
   }
-
-  // --- Internal Helper Methods & Binding Implementations ---
 
   private renderSyncControl(
     containerEl: HTMLElement,
     name: string,
     value: string,
-    persist: (value: string, committedValue: string) => Promise<string>
+    persist: PersistTextValue
   ): void {
     const setting = new Setting(containerEl).setName(name);
     this.bindBlurPersistedText(setting, {
@@ -627,7 +657,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
     options: {
       initialValue: string;
       inputType?: string;
-      persist: (value: string, committedValue: string) => Promise<string>;
+      persist: PersistTextValue;
       placeholder?: string;
     }
   ): void {
@@ -638,11 +668,17 @@ export class VulnDashSettingTab extends PluginSettingTab {
       if (options.placeholder) {
         text.setPlaceholder(options.placeholder);
       }
+
       if (options.inputType) {
         text.inputEl.type = options.inputType;
       }
 
       text.setValue(options.initialValue);
+      text.inputEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          text.inputEl.blur();
+        }
+      });
       text.onChange((value) => {
         draftValue = value;
       });
@@ -655,6 +691,7 @@ export class VulnDashSettingTab extends PluginSettingTab {
           const nextValue = await options.persist(draftValue, committedValue);
           draftValue = nextValue;
           committedValue = nextValue;
+
           if (text.inputEl.value !== nextValue) {
             text.setValue(nextValue);
           }
@@ -669,10 +706,10 @@ export class VulnDashSettingTab extends PluginSettingTab {
     let summaryData: ComputedProductFiltersSummaryData = {
       activeFilterCount: 0,
       contributingSbomCount: 0,
-      groups: [],
-      manualFilterCount: this.normalizeProductFilters(settings.manualProductFilters).length,
       enabledSbomCount: settings.sboms.filter((sbom: ImportedSbomConfig) => sbom.enabled).length,
-      filters: []
+      filters: [],
+      groups: [],
+      manualFilterCount: this.normalizeProductFilters(settings.manualProductFilters).length
     };
 
     const card = containerEl.createDiv({ cls: 'vulndash-product-filters-card' });
@@ -730,8 +767,11 @@ export class VulnDashSettingTab extends PluginSettingTab {
         }
 
         summaryData = nextSummaryData;
-        countChip.textContent = `${summaryData.filters.length} active`;
-        descriptionEl.textContent = this.getComputedProductFiltersDescription(summaryData, settings.sbomImportMode);
+        countChip.textContent = `${summaryData.activeFilterCount} active`;
+        descriptionEl.textContent = this.getComputedProductFiltersDescription(
+          summaryData,
+          this.plugin.getSettings().sbomImportMode
+        );
         viewButton.disabled = false;
         copyButton.disabled = summaryData.filters.length === 0;
 
@@ -764,20 +804,27 @@ export class VulnDashSettingTab extends PluginSettingTab {
 
   private async persistTextValue(text: TextComponent, save: () => Promise<void>): Promise<void> {
     text.inputEl.classList.add('vulndash-input-saving');
+    text.inputEl.disabled = true;
+
     try {
       await save();
       text.inputEl.classList.add('vulndash-input-saved');
       window.setTimeout(() => {
-        text.inputEl.classList.remove('vulndash-input-saved');
-      }, 600);
+        if (text.inputEl.isConnected) {
+          text.inputEl.classList.remove('vulndash-input-saved');
+        }
+      }, SAVED_FEEDBACK_MS);
+    } catch {
+      new Notice('Unable to save setting.');
     } finally {
+      text.inputEl.disabled = false;
       text.inputEl.classList.remove('vulndash-input-saving');
     }
   }
 
   private async getComputedProductFiltersSummaryData(): Promise<ComputedProductFiltersSummaryData> {
-    const enabledSboms = this.plugin.getSettings().sboms.filter((sbom: ImportedSbomConfig) => sbom.enabled);
     const settings = this.plugin.getSettings();
+    const enabledSboms = settings.sboms.filter((sbom: ImportedSbomConfig) => sbom.enabled);
     const manualFilters = this.normalizeProductFilters(settings.manualProductFilters);
     const resolvedComponentGroups = await Promise.all(enabledSboms.map(async (sbom: ImportedSbomConfig) => {
       const components = await this.plugin.getSbomComponents(sbom.id);
@@ -801,12 +848,12 @@ export class VulnDashSettingTab extends PluginSettingTab {
     return {
       activeFilterCount,
       contributingSbomCount: resolvedComponentGroups.filter((group) => group.filters.length > 0).length,
+      enabledSbomCount: enabledSboms.length,
+      filters,
       groups: resolvedComponentGroups
         .filter((group) => group.filters.length > 0)
         .sort((left, right) => left.label.localeCompare(right.label)),
-      manualFilterCount: manualFilters.length,
-      enabledSbomCount: enabledSboms.length,
-      filters
+      manualFilterCount: manualFilters.length
     };
   }
 
@@ -827,10 +874,10 @@ export class VulnDashSettingTab extends PluginSettingTab {
       : `${summaryData.contributingSbomCount} of ${summaryData.enabledSbomCount} enabled SBOMs`;
 
     if (mode === 'append' && summaryData.manualFilterCount > 0) {
-      return `${summaryData.filters.length} computed filter${summaryData.filters.length === 1 ? '' : 's'} are currently active. Computed from ${sbomContext} in append mode, with ${summaryData.manualFilterCount} manual filter${summaryData.manualFilterCount === 1 ? '' : 's'} also active.`;
+      return `${summaryData.activeFilterCount} active filter${summaryData.activeFilterCount === 1 ? '' : 's'}: ${summaryData.filters.length} computed from ${sbomContext}, plus ${summaryData.manualFilterCount} manual filter${summaryData.manualFilterCount === 1 ? '' : 's'}.`;
     }
 
-    return `${summaryData.filters.length} computed filter${summaryData.filters.length === 1 ? '' : 's'} are currently active. Computed from ${sbomContext} in ${mode} mode.`;
+    return `${summaryData.activeFilterCount} active filter${summaryData.activeFilterCount === 1 ? '' : 's'} computed from ${sbomContext} in ${mode} mode.`;
   }
 
   private createProductFilterChip(containerEl: HTMLElement, label: string, muted = false): void {
@@ -888,9 +935,13 @@ export class VulnDashSettingTab extends PluginSettingTab {
   }
 
   private async refreshSbomSummary(setting: Setting): Promise<void> {
-    const statuses = await this.plugin.getSbomFileStatuses();
-    const summary = summarizeSbomWorkspace(this.plugin.getSettings().sboms, statuses);
-    setting.setDesc(this.formatSbomSummaryText(summary));
+    try {
+      const statuses = await this.plugin.getSbomFileStatuses();
+      const summary = summarizeSbomWorkspace(this.plugin.getSettings().sboms, statuses);
+      setting.setDesc(this.formatSbomSummaryText(summary));
+    } catch {
+      setting.setDesc('Unable to load SBOM workspace status. Runtime component data stays in memory, not plugin settings.');
+    }
   }
 
   private formatSbomSummaryText(summary: ReturnType<typeof summarizeSbomWorkspace>): string {
@@ -901,5 +952,41 @@ export class VulnDashSettingTab extends PluginSettingTab {
       `${summary.changed} changed since last sync`,
       'Runtime component data stays in memory, not plugin settings.'
     ].join(' • ');
+  }
+
+  private async updateBuiltInFeed(
+    feedId: string,
+    feedType: VulnDashSettings['feeds'][number]['type'],
+    patch: Partial<VulnDashSettings['feeds'][number]>,
+    rootPatch: Partial<VulnDashSettings> = {}
+  ): Promise<void> {
+    const current = this.plugin.getSettings();
+    const feedExists = current.feeds.some((f) => f.id === feedId && f.type === feedType);
+
+    // Safely append the built-in feed if it was missing from the configuration array
+    const nextFeeds = feedExists
+      ? current.feeds.map((feed) => (
+          feed.id === feedId && feed.type === feedType
+            ? { ...feed, ...patch } as VulnDashSettings['feeds'][number]
+            : feed
+        ))
+      : [...current.feeds, { id: feedId, type: feedType, enabled: false, ...patch } as VulnDashSettings['feeds'][number]];
+
+    await this.plugin.updateSettings({
+      ...current,
+      ...rootPatch,
+      feeds: nextFeeds
+    });
+  }
+
+  private async updateSyncControls(patch: Partial<VulnDashSettings['syncControls']>): Promise<void> {
+    const current = this.plugin.getSettings();
+    await this.plugin.updateSettings({
+      ...current,
+      syncControls: {
+        ...current.syncControls,
+        ...patch
+      }
+    });
   }
 }
