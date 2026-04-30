@@ -237,3 +237,83 @@ test('loadVulnerabilitiesByCacheKeys rehydrates persisted vulnerabilities by com
 
   assert.deepEqual(loaded.map((vulnerability) => vulnerability.id), [second.id, first.id]);
 });
+
+test('iterateCursor continues within the active IndexedDB request turn', async () => {
+  class ActiveTurnCursorRequest {
+    private readonly handlers = new Map<string, Array<() => void>>();
+    private index = 0;
+    private transactionActive = false;
+
+    public error: Error | null = null;
+    public result: IDBCursorWithValue | null = null;
+
+    public constructor(private readonly values: readonly string[]) {}
+
+    public addEventListener(name: string, listener: () => void): void {
+      const listeners = this.handlers.get(name) ?? [];
+      listeners.push(listener);
+      this.handlers.set(name, listeners);
+    }
+
+    public start(): void {
+      this.dispatchSuccess();
+    }
+
+    private dispatchSuccess(): void {
+      if (this.index >= this.values.length) {
+        this.result = null;
+        queueMicrotask(() => this.emit('success'));
+        return;
+      }
+
+      const value = this.values[this.index];
+      this.transactionActive = true;
+      this.result = {
+        value,
+        continue: () => {
+          if (!this.transactionActive) {
+            throw new DOMException('The transaction is not active.', 'TransactionInactiveError');
+          }
+
+          this.transactionActive = false;
+          this.index += 1;
+          queueMicrotask(() => this.dispatchSuccess());
+        }
+      } as unknown as IDBCursorWithValue;
+
+      queueMicrotask(() => {
+        this.emit('success');
+        queueMicrotask(() => {
+          this.transactionActive = false;
+        });
+      });
+    }
+
+    private emit(name: string): void {
+      for (const listener of this.handlers.get(name) ?? []) {
+        listener();
+      }
+    }
+  }
+
+  const repository = createRepository();
+  const request = new ActiveTurnCursorRequest(['first', 'second']);
+  const seen: string[] = [];
+  const iterateCursor = (repository as unknown as {
+    iterateCursor: (
+      request: IDBRequest<IDBCursorWithValue | null>,
+      onCursor: (cursor: IDBCursorWithValue) => void,
+      limit?: number
+    ) => Promise<void>;
+  }).iterateCursor.bind(repository);
+
+  const iteration = iterateCursor(request as unknown as IDBRequest<IDBCursorWithValue | null>, (cursor) => {
+    seen.push(cursor.value as string);
+    return true;
+  });
+
+  request.start();
+  await iteration;
+
+  assert.deepEqual(seen, ['first', 'second']);
+});

@@ -449,4 +449,3 @@ export class SbomImportService {
     };
   }
 }
-

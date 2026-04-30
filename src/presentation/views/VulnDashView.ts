@@ -852,8 +852,3 @@ export class VulnDashView extends ItemView {
     }
   }
 }
-
-
-
-
-

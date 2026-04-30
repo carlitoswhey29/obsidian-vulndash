@@ -1208,4 +1208,3 @@ export default class VulnDashPlugin extends Plugin {
     }));
   }
 }
-

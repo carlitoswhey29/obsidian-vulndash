@@ -8,8 +8,6 @@ export type DashboardSortOrder = 'publishedAt' | 'cvssScore';
 export type DashboardDateField = 'published' | 'modified';
 export type DashboardDateRangePreset = 'past_day' | 'past_3_days' | 'past_7_days' | 'custom';
 
-
-
 export interface ColumnVisibility {
   id: boolean;
   title: boolean;

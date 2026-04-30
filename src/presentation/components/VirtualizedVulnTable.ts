@@ -795,12 +795,3 @@ export class VirtualizedVulnTable {
     }
   }
 }
-
-
-
-
-
-
-
-
-

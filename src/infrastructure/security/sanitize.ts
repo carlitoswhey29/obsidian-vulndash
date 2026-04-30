@@ -29,7 +29,6 @@ export const escapeHtml = (value: string): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#x27;');
 
-
 export const sanitizeUrl = (url: string): string => {
   try {
     const parsed = new URL(url);

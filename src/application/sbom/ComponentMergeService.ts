@@ -3,7 +3,7 @@ import type {
   NormalizedSeverity,
   NormalizedVulnerability
 } from '../../domain/sbom/types';
-import { PurlNormalizer } from '../../domain/services/PurlNormalizer';
+//import { PurlNormalizer } from '../../domain/services/PurlNormalizer';
 import { getHighestSeverity, getSeverityRank } from '../../domain/value-objects/Severity';
 import type { CatalogComponentInput, TrackedComponent, TrackedComponentSource } from './types';
 
@@ -289,7 +289,7 @@ export class ComponentMergeService {
       tracked.version = component.version;
     }
     if (component.purl) {
-      tracked.purl = PurlNormalizer.normalize(component.purl)!; //component.purl;
+      tracked.purl = component.purl; //component.purl;
     }
     if (component.cpe) {
       tracked.cpe = component.cpe;

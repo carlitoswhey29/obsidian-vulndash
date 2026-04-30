@@ -23,7 +23,7 @@ export class VulnCacheRepository implements IOsvQueryCache {
     return count;
   }
 
-  public async loadLatest(limit: number, pageSize: number): Promise<Vulnerability[]> {
+  public async loadLatest(limit: number, _pageSize: number): Promise<Vulnerability[]> {
     if (limit <= 0) {
       return [];
     }
@@ -31,7 +31,7 @@ export class VulnCacheRepository implements IOsvQueryCache {
     const db = await this.database.open();
     const transaction = db.transaction(VULN_CACHE_STORES.vulnerabilities, 'readonly');
     const index = transaction.objectStore(VULN_CACHE_STORES.vulnerabilities).index(VULN_CACHE_INDEXES.byRetentionRank);
-    const records = await this.collectCursorValues(index.openCursor(null, 'prev'), limit, pageSize);
+    const records = await this.collectCursorValues(index.openCursor(null, 'prev'), limit);
     await awaitTransaction(transaction);
     return records.map((record) => record.vulnerability);
   }
@@ -40,7 +40,7 @@ export class VulnCacheRepository implements IOsvQueryCache {
     const db = await this.database.open();
     const transaction = db.transaction(VULN_CACHE_STORES.vulnerabilities, 'readonly');
     const index = transaction.objectStore(VULN_CACHE_STORES.vulnerabilities).index(VULN_CACHE_INDEXES.bySourceId);
-    const records = await this.collectCursorValues(index.openCursor(IDBKeyRange.only(sourceId)), Number.POSITIVE_INFINITY, 250);
+    const records = await this.collectCursorValues(index.openCursor(IDBKeyRange.only(sourceId)), Number.POSITIVE_INFINITY);
     await awaitTransaction(transaction);
 
     const cacheByKey = new Map<string, Vulnerability>();
@@ -57,24 +57,23 @@ export class VulnCacheRepository implements IOsvQueryCache {
     };
   }
 
-  public async pruneExpired(cutoffMs: number, batchSize: number): Promise<number> {
+  public async pruneExpired(cutoffMs: number, _batchSize: number): Promise<number> {
     const db = await this.database.open();
     const transaction = db.transaction(VULN_CACHE_STORES.vulnerabilities, 'readwrite');
     const store = transaction.objectStore(VULN_CACHE_STORES.vulnerabilities);
     const index = store.index(VULN_CACHE_INDEXES.byLastSeenAt);
     let deleted = 0;
 
-    await this.iterateCursor(index.openCursor(IDBKeyRange.upperBound(cutoffMs)), async (cursor) => {
+    await this.iterateCursor(index.openCursor(IDBKeyRange.upperBound(cutoffMs)), (cursor) => {
       store.delete(cursor.primaryKey);
       deleted += 1;
-      return deleted % Math.max(batchSize, 1) === 0;
     });
 
     await awaitTransaction(transaction);
     return deleted;
   }
 
-  public async pruneToHardCap(hardCap: number, batchSize: number): Promise<number> {
+  public async pruneToHardCap(hardCap: number, _batchSize: number): Promise<number> {
     const count = await this.count();
     if (count <= hardCap) {
       return 0;
@@ -87,15 +86,14 @@ export class VulnCacheRepository implements IOsvQueryCache {
     let seen = 0;
     let deleted = 0;
 
-    await this.iterateCursor(index.openCursor(null, 'prev'), async (cursor) => {
+    await this.iterateCursor(index.openCursor(null, 'prev'), (cursor) => {
       seen += 1;
       if (seen <= hardCap) {
-        return seen % Math.max(batchSize, 1) === 0;
+        return;
       }
 
       store.delete(cursor.primaryKey);
       deleted += 1;
-      return deleted % Math.max(batchSize, 1) === 0;
     });
 
     await awaitTransaction(transaction);
@@ -111,7 +109,7 @@ export class VulnCacheRepository implements IOsvQueryCache {
     const transaction = db.transaction(VULN_CACHE_STORES.vulnerabilities, 'readwrite');
     const store = transaction.objectStore(VULN_CACHE_STORES.vulnerabilities);
     const index = store.index(VULN_CACHE_INDEXES.bySourceId);
-    const existingRecords = await this.collectCursorValues(index.openCursor(IDBKeyRange.only(sourceId)), Number.POSITIVE_INFINITY, 250);
+    const existingRecords = await this.collectCursorValues(index.openCursor(IDBKeyRange.only(sourceId)), Number.POSITIVE_INFINITY);
     const existingKeys = new Set(existingRecords.map((record) => record.cacheKey));
     const retainedKeys = new Set<string>();
     const createdAtMs = Date.now();
@@ -153,8 +151,7 @@ export class VulnCacheRepository implements IOsvQueryCache {
     const transaction = db.transaction(VULN_CACHE_STORES.vulnerabilities, 'readonly');
     const records = await this.collectCursorValues(
       transaction.objectStore(VULN_CACHE_STORES.vulnerabilities).openCursor(),
-      Number.POSITIVE_INFINITY,
-      250
+      Number.POSITIVE_INFINITY
     );
     await awaitTransaction(transaction);
     return records.sort(comparePersistedRecordsForHardCap);
@@ -319,13 +316,11 @@ export class VulnCacheRepository implements IOsvQueryCache {
 
   private async collectCursorValues(
     request: IDBRequest<IDBCursorWithValue | null>,
-    limit: number,
-    pageSize: number
+    limit: number
   ): Promise<PersistedVulnerabilityRecord[]> {
     const values: PersistedVulnerabilityRecord[] = [];
-    await this.iterateCursor(request, async (cursor) => {
+    await this.iterateCursor(request, (cursor) => {
       values.push(cursor.value as PersistedVulnerabilityRecord);
-      return values.length % Math.max(pageSize, 1) === 0;
     }, limit);
     return values;
   }
@@ -391,39 +386,60 @@ export class VulnCacheRepository implements IOsvQueryCache {
 
   private async iterateCursor(
     request: IDBRequest<IDBCursorWithValue | null>,
-    onCursor: (cursor: IDBCursorWithValue) => Promise<boolean> | boolean,
+    onCursor: (cursor: IDBCursorWithValue) => void,
     limit = Number.POSITIVE_INFINITY
   ): Promise<void> {
     let seen = 0;
 
     await new Promise<void>((resolve, reject) => {
-      request.addEventListener('error', () => reject(request.error ?? new Error('IndexedDB cursor failed.')));
-      request.addEventListener('success', () => {
-        const cursor = request.result;
-        if (!cursor || seen >= limit) {
-          resolve();
+      let settled = false;
+
+      const resolveOnce = (): void => {
+        if (settled) {
           return;
         }
 
-        void (async () => {
-          try {
-            seen += 1;
-            const shouldYield = await onCursor(cursor);
-            if (seen >= limit) {
-              resolve();
-              return;
-            }
+        settled = true;
+        resolve();
+      };
 
-            if (shouldYield) {
-              setTimeout(() => cursor.continue(), 0);
-              return;
-            }
+      const rejectOnce = (error: unknown): void => {
+        if (settled) {
+          return;
+        }
 
-            cursor.continue();
-          } catch (error) {
-            reject(error);
+        settled = true;
+        reject(error);
+      };
+
+      request.addEventListener('error', () => rejectOnce(request.error ?? new Error('IndexedDB cursor failed.')));
+      request.addEventListener('success', () => {
+        if (settled) {
+          return;
+        }
+
+        const cursor = request.result;
+        if (!cursor || seen >= limit) {
+          resolveOnce();
+          return;
+        }
+
+        try {
+          seen += 1;
+
+          // IndexedDB cursor transactions become inactive once the request callback yields
+          // back to the event loop, so cursor work must stay synchronous.
+          onCursor(cursor);
+
+          if (seen >= limit) {
+            resolveOnce();
+            return;
           }
-        })();
+
+          cursor.continue();
+        } catch (error) {
+          rejectOnce(error);
+        }
       });
     });
   }

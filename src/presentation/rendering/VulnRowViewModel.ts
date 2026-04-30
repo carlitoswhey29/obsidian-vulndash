@@ -132,4 +132,3 @@ export const buildVulnRowViewModel = (
   triageState: options.triageState,
   unmappedSbomLabels: options.affectedProjectResolution.unmappedSboms.map((sbom) => sanitizeText(sbom.sbomLabel))
 });
-
